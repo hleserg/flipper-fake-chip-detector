@@ -1254,11 +1254,16 @@ static void live_publish(void* ctx, const LiveTestState* state) {
            now - app->live_chime_tick >= furi_ms_to_ticks(LIVE_CHIME_MIN_GAP_MS)) {
             app->live_chime_tick = now;
             i2c_notify_play(app->notifications, I2CNotifyCalibrated);
+            // Latched only once it has actually been heard, so the chime fires
+            // on the transition rather than on every poll. Latching a
+            // suppressed one instead would spend the success on silence: the
+            // rate limit would swallow it and the latch would stop it ever
+            // being retried, leaving a tick on screen with no sound at all.
+            app->live_chimed = true;
         }
+    } else if(!succeeded) {
+        app->live_chimed = false; // re-arm when the part falls back out
     }
-    // Latched so the chime fires on the transition, not on every poll — and
-    // re-arms if the part falls back out of its success state.
-    app->live_chimed = succeeded;
 }
 
 static int32_t live_thread_worker(void* context) {
