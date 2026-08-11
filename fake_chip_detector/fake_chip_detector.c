@@ -1001,6 +1001,7 @@ static void worker_event_callback(I2CWorkerEvent event, void* context) {
 
 static void wiring_enter_callback(void* context) {
     FakeChipApp* app = context;
+    app->current_view = FakeChipViewWiring;
     with_view_model(
         app->wiring_view,
         WiringViewModel * m,
@@ -1303,6 +1304,7 @@ static void app_start_live_test(
 
 static void live_enter_callback(void* context) {
     FakeChipApp* app = context;
+    app->current_view = FakeChipViewLive;
     app->live_chimed = false;
     app->live_chime_tick = 0;
     with_view_model(
@@ -2295,9 +2297,21 @@ static uint32_t nav_to_menu(void* context) {
     return FakeChipViewMenu;
 }
 
+// Which screen the animation thread should be ticking. The dispatcher runs the
+// outgoing view's exit callback *after* app_switch_view has already published
+// the incoming one, so an exit callback that assigns unconditionally undoes the
+// switch that is happening right now — which is how the live test ended up
+// launching from the verdict screen with its frame counter stuck at zero. An
+// enter callback runs last and can assign freely; an exit callback may only
+// stand down if nobody else has claimed the slot.
+static void scan_enter_callback(void* context) {
+    FakeChipApp* app = context;
+    app->current_view = FakeChipViewScan;
+}
+
 static void scan_exit_callback(void* context) {
     FakeChipApp* app = context;
-    app->current_view = FakeChipViewMenu;
+    if(app->current_view == FakeChipViewScan) app->current_view = FakeChipViewMenu;
     i2c_worker_abort_scan(app->worker); // never leave a sweep running behind us
 }
 
@@ -2363,6 +2377,7 @@ static FakeChipApp* fake_chip_app_alloc(void) {
     view_allocate_model(app->scan_view, ViewModelTypeLocking, sizeof(ScanViewModel));
     view_set_draw_callback(app->scan_view, scan_draw_callback);
     view_set_input_callback(app->scan_view, scan_input_callback);
+    view_set_enter_callback(app->scan_view, scan_enter_callback);
     view_set_exit_callback(app->scan_view, scan_exit_callback);
     view_set_previous_callback(app->scan_view, nav_to_menu);
     view_dispatcher_add_view(app->view_dispatcher, FakeChipViewScan, app->scan_view);
