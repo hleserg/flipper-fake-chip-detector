@@ -123,6 +123,7 @@ typedef struct {
     // app has crashed users before by holding memory it was not using.
     char (*names)[SAVED_NAME_LEN];
     uint8_t count;
+    uint16_t skipped; // matching files past SAVED_MAX, reported rather than hidden
     uint8_t selected;
 } SavedViewModel;
 
@@ -1858,15 +1859,32 @@ static void saved_reload(FakeChipApp* app) {
     File* d = storage_file_alloc(storage);
     char(*names)[SAVED_NAME_LEN] = malloc(SAVED_MAX * SAVED_NAME_LEN);
     uint8_t count = 0;
+    uint16_t total = 0;
 
     if(storage_dir_open(d, furi_string_get_cstr(dir))) {
         FileInfo info;
         char name[SAVED_NAME_LEN];
-        while(count < SAVED_MAX && storage_dir_read(d, &info, name, sizeof(name))) {
+        while(storage_dir_read(d, &info, name, sizeof(name))) {
             if(file_info_is_dir(&info)) continue;
             if(strncmp(name, REPORT_FILE_PREFIX, strlen(REPORT_FILE_PREFIX)) != 0) continue;
-            snprintf(names[count], SAVED_NAME_LEN, "%s", name);
-            count++;
+            total++;
+
+            // Newest first, and the newest are the ones kept. Stopping at the
+            // first SAVED_MAX the directory happened to hand over threw away
+            // whichever were newest — so the user saved a report, opened this
+            // screen and could not find the one they had just made. The name
+            // carries the timestamp in a form that sorts, so "newer" is only
+            // "greater", and an insertion into a list this short costs nothing
+            // next to the directory read it sits inside.
+            if(count == SAVED_MAX && strcmp(name, names[SAVED_MAX - 1]) <= 0) continue;
+
+            uint8_t pos = count < SAVED_MAX ? count : (uint8_t)(SAVED_MAX - 1);
+            while(pos > 0 && strcmp(names[pos - 1], name) < 0) {
+                memcpy(names[pos], names[pos - 1], SAVED_NAME_LEN);
+                pos--;
+            }
+            snprintf(names[pos], SAVED_NAME_LEN, "%s", name);
+            if(count < SAVED_MAX) count++;
         }
         storage_dir_close(d);
     }
@@ -1884,6 +1902,7 @@ static void saved_reload(FakeChipApp* app) {
             old = m->names;
             m->names = names;
             m->count = count;
+            m->skipped = (uint16_t)(total - count);
             if(m->selected >= count) m->selected = count ? (uint8_t)(count - 1) : 0;
         },
         true);
@@ -1987,7 +2006,16 @@ static void saved_draw_callback(Canvas* canvas, void* model) {
             canvas_draw_str(canvas, 4, y, buf);
         }
     }
-    draw_action_bar(canvas, "OK: read it", false);
+
+    // What was left out is said, not hidden. A list that quietly stops at 32 of
+    // 40 reads as "that is all of them".
+    if(m->skipped) {
+        char bar[32];
+        snprintf(bar, sizeof(bar), "OK: read it - %u older", m->skipped);
+        draw_action_bar(canvas, bar, false);
+    } else {
+        draw_action_bar(canvas, "OK: read it", false);
+    }
 }
 
 static bool saved_input_callback(InputEvent* event, void* context) {
