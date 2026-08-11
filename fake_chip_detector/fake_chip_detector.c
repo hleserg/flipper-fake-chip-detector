@@ -1116,6 +1116,11 @@ static uint32_t nav_to_scan(void* context) {
 // how it draws that, if text will not do — lives in live_<part>.c; see
 // live_test.h for the contract and how to add one.
 
+// Steps a test can ask to have counted out as boxes. Eleven of them at nine
+// pixels fill the hundred-pixel strip the bar has; nothing wider fits, and a
+// test asking for more is asking for something that cannot be drawn.
+#define LIVE_PROGRESS_MAX_CELLS 11
+
 // The screen for every phase where there is nothing to measure yet. Shared on
 // purpose: "warming up" and "it dropped off" should look the same whichever
 // part is being tested, so only the readings get a custom picture.
@@ -1254,6 +1259,16 @@ static void live_publish(void* ctx, const LiveTestState* state) {
             m->state.unit[LIVE_TEST_UNIT_LEN - 1] = '\0';
             for(size_t i = 0; i < LIVE_TEST_LINES; i++) {
                 m->state.lines[i][LIVE_TEST_LINE_LEN - 1] = '\0';
+            }
+            // Same reason, in arithmetic rather than in bytes. A step count the
+            // strip cannot hold makes `progress_max * 9 - 2` wrap the width it
+            // is measured in and sends the draw loop round two hundred times
+            // for a row of boxes off the side of the screen.
+            if(m->state.progress_max > LIVE_PROGRESS_MAX_CELLS) {
+                m->state.progress_max = LIVE_PROGRESS_MAX_CELLS;
+            }
+            if(m->state.progress > m->state.progress_max) {
+                m->state.progress = m->state.progress_max;
             }
         },
         true);

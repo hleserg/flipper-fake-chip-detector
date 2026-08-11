@@ -110,6 +110,8 @@ typedef struct {
 
     // Optional step counter, e.g. calibration levels reached. Drawn as filled
     // boxes when progress_max is non-zero, and chimed once on completion.
+    // At most eleven of them: that is what fits across the screen, and the app
+    // clamps rather than drawing off the side of it.
     uint8_t progress;
     uint8_t progress_max;
 
