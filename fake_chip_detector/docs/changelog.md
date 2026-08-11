@@ -85,9 +85,10 @@
   walked off the end of the mapped file while merely listing the folder, and the resulting crash
   left no way to delete the file from inside the app. The state a running test publishes is
   terminated by the app before anything draws it. A test that ignores its stop flag can still
-  stall the app on the way out — the worker is writing into the view model and, from a card,
-  running inside a mapping about to be unmapped, so the wait cannot be abandoned — but past two
-  seconds the screen says which side is at fault instead of looking like a freeze.
+  stall the app on the way out — the worker is writing into the view model and, from a card, running inside a mapping
+  about to be unmapped, so the wait cannot be abandoned — and the screen cannot say so, because
+  the thread that draws it is the one waiting. Past two seconds it chirps instead, which is the
+  one signal that still gets out.
 - A 1-Wire scratchpad of nothing but zeros is rejected rather than reported as 0.0 °C. CRC8 over
   eight zero bytes is zero, so a transfer that collapsed halfway passed the checksum and was
   drawn as a working sensor.

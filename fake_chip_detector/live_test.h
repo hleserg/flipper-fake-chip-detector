@@ -266,6 +266,15 @@ typedef struct {
     // finishes early leaves the user staring at a frozen screen. Loop until
     // stopped.
     //
+    // And return PROMPTLY once it is. The app waits for this function on the
+    // thread that draws every screen, because until it returns the test is
+    // still writing into the view model and, from an SD card, still executing
+    // inside a mapping about to be unmapped — so the wait cannot be abandoned.
+    // While it lasts the whole app is stopped: nothing redraws, no key does
+    // anything, and it looks exactly like the firmware has died. Slice long
+    // delays and check the flag between the slices; every test in this
+    // repository checks it at least five times a second.
+    //
     // OWNS ITS OWN CLEANUP, on every exit path. There is no teardown hook and
     // there never will be one: if your part needs to be put back into a low
     // power mode, do it before each `return`, including the error returns.

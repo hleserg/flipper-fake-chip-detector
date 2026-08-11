@@ -1358,7 +1358,7 @@ static void live_enter_callback(void* context) {
     furi_thread_start(app->live_thread);
 }
 
-// How long a test gets to notice the stop flag before the screen says out loud
+// How long a test gets to notice the stop flag before the app says out loud
 // that it is the test's fault. Every shipped test slices its delays, so the
 // longest honest wait is one slice; two seconds is far past that.
 #define LIVE_STOP_GRACE_MS 2000
@@ -1374,29 +1374,27 @@ static void live_exit_callback(void* context) {
         // executing inside a mapping the lines below are about to unmap.
         // Returning early would trade a stall the user can see for a write into
         // freed memory they cannot, which is the one failure this app must not
-        // produce. So the join stays, and what changes is the silence: past the
-        // grace period the screen names what is happening instead of looking
-        // like the firmware died.
+        // produce. So the join stays.
+        //
+        // What is said about it cannot be said on the screen. The dispatcher
+        // runs its views on an event loop, and this thread is that loop: a
+        // model committed with update=true only queues a repaint for a consumer
+        // that is standing right here, so nothing would be drawn — and the
+        // animation thread is filling that same queue at every tick, so putting
+        // one more message on it from this side risks blocking forever on a
+        // queue nobody can drain. A stall would become a hang.
+        //
+        // The notification service has its own thread and keeps draining, so
+        // the attention chirp is the one signal that still gets out. It says
+        // "this is the app, not your imagination" and nothing more; the honest
+        // description of what went wrong belongs in LIVE_TESTS.md, where it is
+        // addressed to whoever wrote the test.
         uint32_t waited = 0;
+        bool complained = false;
         while(furi_thread_get_state(app->live_thread) != FuriThreadStateStopped) {
-            if(waited >= LIVE_STOP_GRACE_MS) {
-                with_view_model(
-                    app->live_view,
-                    LiveViewModel * m,
-                    {
-                        // Starting, not Lost: Lost draws "Retrying...", and
-                        // nothing is being retried. Starting draws the sweep,
-                        // which the animation thread keeps moving from outside
-                        // this stall — so the screen shows waiting, truthfully.
-                        m->state.phase = LiveTestPhaseStarting;
-                        snprintf(
-                            m->state.lines[0], LIVE_TEST_LINE_LEN, "This test will not stop.");
-                        snprintf(
-                            m->state.lines[1], LIVE_TEST_LINE_LEN, "Waiting for it...");
-                        m->state.lines[2][0] = '\0';
-                    },
-                    true);
-                break;
+            if(!complained && waited >= LIVE_STOP_GRACE_MS) {
+                complained = true;
+                i2c_notify_play(app->notifications, I2CNotifyAttention);
             }
             furi_delay_ms(20);
             waited += 20;
