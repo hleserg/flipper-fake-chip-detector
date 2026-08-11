@@ -377,6 +377,12 @@ static void app_start_scan(FakeChipApp* app) {
             m->scroll = 0;
             m->bus = (I2CBusCheck){0};
             m->status_msg[0] = '\0';
+            // The question belongs to the module that was on the bus when it
+            // was asked. Carrying the answer into the next scan silently skips
+            // asking and hands the previous module's verdict to this one: a
+            // genuine part accused of being "NOT YOURS", or worse, a part
+            // nobody was asked about waved through as the real deal.
+            m->answer = AnswerAsking;
         },
         true);
     app_switch_view(app, FakeChipViewScan);
