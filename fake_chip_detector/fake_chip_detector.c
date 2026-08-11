@@ -1239,7 +1239,24 @@ static void live_draw_callback(Canvas* canvas, void* model) {
 // owns the one thing a test must not decide for itself: when to make a noise.
 static void live_publish(void* ctx, const LiveTestState* state) {
     FakeChipApp* app = ctx;
-    with_view_model(app->live_view, LiveViewModel * m, { m->state = *state; }, true);
+    with_view_model(
+        app->live_view,
+        LiveViewModel * m,
+        {
+            m->state = *state;
+            // The test filled these, and a test can be somebody else's .fal off
+            // the SD card. One that writes its full buffer width leaves no
+            // terminator, and the draw callback then walks out of the array and
+            // off the end of this model — on a part with no MMU that is a hard
+            // fault mid-measurement, not a garbled line. The last byte of each
+            // is the app's, not the test's.
+            m->state.heading[LIVE_TEST_HEADING_LEN - 1] = '\0';
+            m->state.unit[LIVE_TEST_UNIT_LEN - 1] = '\0';
+            for(size_t i = 0; i < LIVE_TEST_LINES; i++) {
+                m->state.lines[i][LIVE_TEST_LINE_LEN - 1] = '\0';
+            }
+        },
+        true);
 
     bool succeeded = (state->phase == LiveTestPhasePassed) ||
                      (state->progress_max && state->progress >= state->progress_max);
@@ -1341,10 +1358,49 @@ static void live_enter_callback(void* context) {
     furi_thread_start(app->live_thread);
 }
 
+// How long a test gets to notice the stop flag before the screen says out loud
+// that it is the test's fault. Every shipped test slices its delays, so the
+// longest honest wait is one slice; two seconds is far past that.
+#define LIVE_STOP_GRACE_MS 2000
+
 static void live_exit_callback(void* context) {
     FakeChipApp* app = context;
     app->live_stop = true;
     if(app->live_thread) {
+        // This runs on the dispatcher's thread, so the wait is felt as the
+        // whole app stopping — and the code being waited for can be somebody
+        // else's .fal. Giving up on the join is not the way out of that: the
+        // worker holds a pointer to this view model and, for a card test, is
+        // executing inside a mapping the lines below are about to unmap.
+        // Returning early would trade a stall the user can see for a write into
+        // freed memory they cannot, which is the one failure this app must not
+        // produce. So the join stays, and what changes is the silence: past the
+        // grace period the screen names what is happening instead of looking
+        // like the firmware died.
+        uint32_t waited = 0;
+        while(furi_thread_get_state(app->live_thread) != FuriThreadStateStopped) {
+            if(waited >= LIVE_STOP_GRACE_MS) {
+                with_view_model(
+                    app->live_view,
+                    LiveViewModel * m,
+                    {
+                        // Starting, not Lost: Lost draws "Retrying...", and
+                        // nothing is being retried. Starting draws the sweep,
+                        // which the animation thread keeps moving from outside
+                        // this stall — so the screen shows waiting, truthfully.
+                        m->state.phase = LiveTestPhaseStarting;
+                        snprintf(
+                            m->state.lines[0], LIVE_TEST_LINE_LEN, "This test will not stop.");
+                        snprintf(
+                            m->state.lines[1], LIVE_TEST_LINE_LEN, "Waiting for it...");
+                        m->state.lines[2][0] = '\0';
+                    },
+                    true);
+                break;
+            }
+            furi_delay_ms(20);
+            waited += 20;
+        }
         furi_thread_join(app->live_thread);
         furi_thread_free(app->live_thread);
         app->live_thread = NULL;
