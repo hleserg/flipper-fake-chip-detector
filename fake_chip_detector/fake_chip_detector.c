@@ -1174,11 +1174,22 @@ static void live_draw_generic(Canvas* canvas, const LiveViewModel* m) {
         y = 46;
     }
 
+    // A bar sits in the bottom strip of the screen rather than flowing after
+    // the text, because the text is what decides whether it appears at all:
+    // laid out in sequence, a heading and two lines left y past the bottom and
+    // the bar was silently never drawn — which is exactly the shape the AHT
+    // test publishes on every poll. Reserving the strip costs a pixel of line
+    // spacing and keeps both.
+    const bool has_bar = measuring && (st->bar_max || st->progress_max);
+    const uint8_t bar_y = 57; // a 7-pixel bar ends on row 63, the last one
+    const uint8_t line_limit = has_bar ? (uint8_t)(bar_y - 2) : 62;
+    const uint8_t line_step = has_bar ? 9 : 10;
+
     canvas_set_font(canvas, FontSecondary);
-    for(size_t i = 0; i < LIVE_TEST_LINES && y <= 62; i++) {
+    for(size_t i = 0; i < LIVE_TEST_LINES && y <= line_limit; i++) {
         if(!st->lines[i][0]) continue;
         canvas_draw_str_aligned(canvas, 64, y, AlignCenter, AlignBottom, st->lines[i]);
-        y += 10;
+        y += line_step;
     }
 
     if(st->phase == LiveTestPhaseStarting && y + 8 <= 62) {
@@ -1193,18 +1204,18 @@ static void live_draw_generic(Canvas* canvas, const LiveViewModel* m) {
         // True for both: the test's outer loop keeps re-checking, so swapping
         // the module or pushing the wire back in picks up without leaving.
         canvas_draw_str_aligned(canvas, 64, y, AlignCenter, AlignBottom, "Retrying...");
-    } else if(measuring && st->bar_max && y + 7 <= 63) {
+    } else if(measuring && st->bar_max) {
         uint8_t fill = st->bar > st->bar_max ? st->bar_max : st->bar;
-        canvas_draw_frame(canvas, 14, y, 100, 7);
-        canvas_draw_box(canvas, 14, y, (uint8_t)((uint32_t)100 * fill / st->bar_max), 7);
-    } else if(measuring && st->progress_max && y + 7 <= 63) {
+        canvas_draw_frame(canvas, 14, bar_y, 100, 7);
+        canvas_draw_box(canvas, 14, bar_y, (uint8_t)((uint32_t)100 * fill / st->bar_max), 7);
+    } else if(measuring && st->progress_max) {
         uint8_t bw = st->progress_max * 9 - 2;
         uint8_t bx = 64 - bw / 2;
         for(uint8_t i = 0; i < st->progress_max; i++) {
             if(i < st->progress) {
-                canvas_draw_box(canvas, bx + i * 9, y, 7, 7);
+                canvas_draw_box(canvas, bx + i * 9, bar_y, 7, 7);
             } else {
-                canvas_draw_frame(canvas, bx + i * 9, y, 7, 7);
+                canvas_draw_frame(canvas, bx + i * 9, bar_y, 7, 7);
             }
         }
     }
