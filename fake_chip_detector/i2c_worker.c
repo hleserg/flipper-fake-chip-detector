@@ -12,21 +12,30 @@
 #define WORKER_FLAG_EXIT  (1UL << 1)
 #define WORKER_FLAG_WATCH (1UL << 3)
 #define WORKER_FLAG_PAD   (1UL << 4)
-#define WORKER_FLAG_POWER (1UL << 5)
+#define WORKER_FLAG_FIX   (1UL << 5)
 #define WORKER_FLAG_ALL \
-    (WORKER_FLAG_SCAN | WORKER_FLAG_EXIT | WORKER_FLAG_WATCH | WORKER_FLAG_PAD | WORKER_FLAG_POWER)
+    (WORKER_FLAG_SCAN | WORKER_FLAG_EXIT | WORKER_FLAG_WATCH | WORKER_FLAG_PAD | WORKER_FLAG_FIX)
 
 // How many agreeing reads it takes to move the pad meter. At 50ms a read that
 // is a fifth of a second of steadiness, which is short enough to feel live and
 // long enough that a hand near a floating pad does not make it flicker.
 #define PAD_SETTLE_READS 4
 
-// Bounds on the power cycle. The rail is watched down rather than waited out,
-// but a module with a fat bulk capacitor can hold itself up for a while and
-// something has to end the wait. The boot delay afterwards is the longest
-// power-on time among the parts in the database, rounded up.
-#define POWER_DOWN_MAX_MS 2000
-#define POWER_BOOT_MS     650
+// How long to spend trying to cut the rail from software before asking the
+// person to do it. Measured on a Flipper Zero running Unleashed 0.90 with the
+// bench on USB: furi_hal_power_disable_external_3_3v() does not de-power header
+// pin 9 at all. The module's pull-up survived a 800ms outage sampled every
+// 20ms, a 512-byte SD sector read succeeded 300ms in, and a VL6180X parked at a
+// non-default address by register 0x0212 -- a value that cannot survive a
+// power-on reset -- kept it. Re-issuing the call every 20ms changed nothing.
+// The attempt stays because that was one device on one firmware, but nothing
+// downstream may assume it worked: the lines have to be seen falling.
+#define RAIL_TRY_MS   300
+#define POWER_BOOT_MS 650
+
+// Agreeing reads before the strap is called applied or lost. The pull is weak
+// and the pad may be capacitive, so give it a moment before judging.
+#define STRAP_SETTLE_READS 3
 
 struct I2CWorker {
     FuriThread* thread;
@@ -36,8 +45,11 @@ struct I2CWorker {
     volatile bool busy;
     volatile bool watch_stop;
     volatile bool pad_stop;
+    volatile bool fix_stop;
     volatile bool scan_abort;
     volatile uint8_t pad_level; // I2CPadLevel
+    volatile uint8_t fix_stage; // I2CFixStage
+    volatile bool fix_want_high; // level the pad has to sit at for I2C
     volatile uint32_t probe_timeout_ms;
     volatile uint8_t progress_addr;
     I2CFoundDevice found[I2C_SCAN_MAX_FOUND];
@@ -318,24 +330,116 @@ static void i2c_worker_do_pad_watch(I2CWorker* worker) {
     }
 }
 
-// Both halves live here with nothing between them that can return early: an
-// app that exits leaving the user's sensor unpowered is worse than one that
-// never offered to cycle it.
-static void i2c_worker_do_power_cycle(I2CWorker* worker) {
-    furi_hal_power_disable_external_3_3v();
+/* ---- the fix run ---- */
 
-    // Watch the rail fall instead of guessing how long it takes. A module's
-    // pull-ups hold the lines high for as long as its bulk capacitor lasts, so
-    // the lines going quiet is the actual signal that the part lost power.
-    for(uint32_t waited = 0; waited < POWER_DOWN_MAX_MS; waited += 20) {
-        bool stuck = false;
-        if(!i2c_line_probe(&gpio_ext_pc0, &stuck) && !i2c_line_probe(&gpio_ext_pc1, &stuck)) break;
-        furi_delay_ms(20);
+static void fix_set(I2CWorker* worker, I2CFixStage stage) {
+    worker->fix_stage = (uint8_t)stage;
+    i2c_worker_notify(worker, I2CWorkerEventFixUpdate);
+}
+
+// The strap. Weak on purpose: the internal pull is ~40k, which is enough to
+// hold a high-impedance mode input but cannot fight a driver, so if the wire
+// turns out to be sitting on an output the two never argue. It also cannot
+// back-feed enough current through an unpowered chip's protection diode to keep
+// the part alive across the power cycle that follows, which a push-pull output
+// on the same pin could.
+static void fix_strap_apply(bool want_high) {
+    furi_hal_gpio_init(
+        &gpio_ext_pc1, GpioModeInput, want_high ? GpioPullUp : GpioPullDown, GpioSpeedLow);
+}
+
+static void fix_strap_release(void) {
+    furi_hal_gpio_init(&gpio_ext_pc1, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
+}
+
+// Reading the pin back is the whole point. A pad tied the wrong way in copper
+// wins against the internal pull, and saying so is worth far more than a fix
+// that quietly does nothing: it tells the buyer the board decided this, not
+// them.
+static bool fix_strap_took(bool want_high) {
+    furi_delay_ms(20);
+    for(uint8_t i = 0; i < STRAP_SETTLE_READS; i++) {
+        if(furi_hal_gpio_read(&gpio_ext_pc1) != want_high) return false;
+        furi_delay_ms(10);
+    }
+    return true;
+}
+
+// SCL only. Pin 15 is holding the strap, so the module's other pull-up is the
+// one thing left that still reports whether it has power.
+static bool fix_module_powered(void) {
+    bool stuck = false;
+    return i2c_line_probe(&gpio_ext_pc0, &stuck);
+}
+
+// Waits for the module's power to go the way asked. Returns false if the view
+// went away while waiting.
+static bool fix_wait_power(I2CWorker* worker, bool want_powered) {
+    while(!worker->fix_stop) {
+        if(fix_module_powered() == want_powered) return true;
+        furi_delay_ms(50);
+    }
+    return false;
+}
+
+// Strap the pad, get the part restarted so the strap is actually sampled, then
+// get the wire back on the bus. Every step ends on a measurement rather than a
+// delay, and nothing here claims anything the app has not seen: if the rail
+// cannot be cut from software, the person is asked, and the app waits until the
+// pull-ups really do disappear.
+static void i2c_worker_do_fix(I2CWorker* worker) {
+    bool want_high = worker->fix_want_high;
+
+    fix_set(worker, I2CFixStrapping);
+    fix_strap_apply(want_high);
+    if(!fix_strap_took(want_high)) {
+        fix_strap_release();
+        fix_set(worker, I2CFixPadHeld); // terminal: the screen offers the report
+        return;
     }
 
+    // One quiet attempt at cutting the rail ourselves, so a device where that
+    // works never bothers its owner. Continue only if the lines are seen
+    // falling; on the bench they do not.
+    furi_hal_power_disable_external_3_3v();
+    bool fell = false;
+    for(uint32_t waited = 0; waited < RAIL_TRY_MS && !worker->fix_stop; waited += 20) {
+        if(!fix_module_powered()) {
+            fell = true;
+            break;
+        }
+        furi_delay_ms(20);
+    }
     furi_hal_power_enable_external_3_3v();
+
+    if(!fell) {
+        fix_set(worker, I2CFixWantPowerOff);
+        if(!fix_wait_power(worker, false)) {
+            fix_strap_release();
+            return;
+        }
+        fix_set(worker, I2CFixWantPowerOn);
+        if(!fix_wait_power(worker, true)) {
+            fix_strap_release();
+            return;
+        }
+    }
     furi_delay_ms(POWER_BOOT_MS);
-    i2c_worker_notify(worker, I2CWorkerEventPowerCycled);
+
+    // The strap has done its job the moment the part came up holding it: a mode
+    // pin is sampled at reset and kept. Let go before asking for the wire back,
+    // or the pull would fight the bus.
+    fix_strap_release();
+    fix_set(worker, I2CFixWantWire);
+    while(!worker->fix_stop) {
+        I2CBusCheck bus;
+        i2c_worker_check_bus(&bus);
+        if(bus.health == I2CBusOk) {
+            fix_set(worker, I2CFixDone);
+            return;
+        }
+        furi_delay_ms(100);
+    }
 }
 
 static int32_t i2c_worker_thread(void* context) {
@@ -359,14 +463,16 @@ static int32_t i2c_worker_thread(void* context) {
             i2c_worker_do_pad_watch(worker);
             worker->busy = false;
         }
-        if(flags & WORKER_FLAG_POWER) {
+        if(flags & WORKER_FLAG_FIX) {
             worker->busy = true;
-            i2c_worker_do_power_cycle(worker);
+            i2c_worker_do_fix(worker);
             worker->busy = false;
         }
     }
-    // Never leave the bench dark: whatever the app was doing, the sensor gets
-    // its rail back before this thread stops answering.
+    // Never leave the bench dark, and never leave a pull hanging on the bus:
+    // whatever the app was doing, the sensor gets its rail and its line back
+    // before this thread stops answering.
+    fix_strap_release();
     furi_hal_power_enable_external_3_3v();
     return 0;
 }
@@ -449,10 +555,21 @@ I2CPadLevel i2c_worker_get_pad(I2CWorker* worker) {
     return (I2CPadLevel)worker->pad_level;
 }
 
-void i2c_worker_power_cycle(I2CWorker* worker) {
-    worker->watch_stop = true; // nothing may probe the lines while they fall
+void i2c_worker_fix_start(I2CWorker* worker, bool want_high) {
+    worker->watch_stop = true; // both of those own pin 15, and the strap needs it
     worker->pad_stop = true;
-    furi_thread_flags_set(furi_thread_get_id(worker->thread), WORKER_FLAG_POWER);
+    worker->fix_stop = false;
+    worker->fix_want_high = want_high;
+    worker->fix_stage = I2CFixStrapping;
+    furi_thread_flags_set(furi_thread_get_id(worker->thread), WORKER_FLAG_FIX);
+}
+
+void i2c_worker_fix_stop(I2CWorker* worker) {
+    worker->fix_stop = true;
+}
+
+I2CFixStage i2c_worker_get_fix_stage(I2CWorker* worker) {
+    return (I2CFixStage)worker->fix_stage;
 }
 
 void i2c_worker_get_bus(I2CWorker* worker, I2CBusCheck* out) {

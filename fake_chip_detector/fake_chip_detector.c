@@ -143,14 +143,18 @@ typedef struct {
 // touch view models under their own lock, but navigation belongs to the thread
 // that owns the event loop.
 typedef enum {
-    AppEventPowerCycled = 1,
+    AppEventFixDone = 1,
 } AppCustomEvent;
 
 typedef struct {
     uint8_t selected; // which family of pad labels the user says they are on
     uint8_t level; // I2CPadLevel, as last settled by the meter
     uint32_t frame;
-    bool cycling; // the rail is down and we are waiting for the part to boot
+    uint8_t stage; // I2CFixStage; I2CFixIdle means the meter owns the screen
+    // A pin that is only read at reset can be strapped with the one spare wire
+    // and let go afterwards. One that has to be held cannot, and the screen
+    // says that instead of pretending.
+    bool needs_fifth_wire;
     // Frame the report was written on, or 0. A save nobody is told about is
     // the same as no save: the footer says so for a few seconds and then goes
     // back to explaining the pad.
@@ -991,37 +995,164 @@ typedef struct {
     const char* when_low;
     bool explains_high; // this level is a reason the part cannot answer
     bool explains_low;
+    bool want_high; // level this kind of pad needs for the part to speak I2C
+    // Sampled once at reset and then kept. That is what makes a fix possible on
+    // four wires: the pad only has to be held while the part restarts, so the
+    // same wire can go back to carrying SDA afterwards. A pin that has to be
+    // held the whole time cannot be fixed and helped at once with four wires,
+    // and saying so is the honest answer.
+    bool latched;
 } PadFamily;
 
 static const PadFamily pad_families[SILENT_ROWS] = {
     // The SPI class: BME280, BMP280, most ST and ADI accelerometers. Every one
-    // of them wants this pad high to stay on I2C.
-    {"CS  CSB  NSS", "High = I2C. Not this.", "Low picks SPI. This is it.", false, true},
-    // Protocol select proper, which is the BNO055 case.
-    {"PS0  PS1  SEL", "High picks UART or SPI.", "Low picks I2C. Not this.", true, false},
-    // Not a protocol at all: the part is simply held off.
-    {"XSHUT  RES  EN", "High = enabled. Not this.", "Low holds it in reset.", false, true},
+    // of them wants this pad high to stay on I2C. The Bosch parts latch it:
+    // "the I2C interface is disabled until the next power-on-reset".
+    {"CS  CSB  NSS", "High = I2C. Not this.", "Low picks SPI. This is it.", false, true, true, true},
+    // Protocol select proper, which is the BNO055 case. Table 4-4: the pins are
+    // read at reset and must not be left floating.
+    {"PS0  PS1  SEL",
+     "High picks UART or SPI.",
+     "Low picks I2C. Not this.",
+     true,
+     false,
+     false,
+     true},
+    // Not a protocol at all: the part is simply held off, and it stays off for
+    // exactly as long as the pin is low. Nothing is latched, so there is no
+    // moment where letting go is safe.
+    {"XSHUT  RES  EN",
+     "High = enabled. Not this.",
+     "Low holds it in reset.",
+     false,
+     true,
+     true,
+     false},
     // Ruling something out is progress and should read as progress.
-    {"AD0  ADR  SDO", "Address only - all swept.", "Address only - all swept.", false, false},
+    {"AD0  ADR  SDO",
+     "Address only - all swept.",
+     "Address only - all swept.",
+     false,
+     false,
+     false,
+     false},
 };
+
+// ~3 seconds at the 60ms tick. A save nobody is told about is the same as no
+// save, and every screen here can write one.
+static bool silent_saved_recently(const SilentViewModel* m) {
+    return m->saved_frame && m->frame - m->saved_frame < 50;
+}
+
+// Is this level, on this kind of pad, a reason the part cannot answer?
+static bool silent_pad_explains(const PadFamily* fam, uint8_t level) {
+    if(!fam->explains_high && !fam->explains_low) return false; // the address row
+    // A mode pin left floating is not a grey area: BST-BNO055-DS000 says
+    // outright that the protocol select pins may not be left floating, and
+    // Bosch's pressure parts want CSB tied rather than left to drift. Whatever
+    // such a pad settles on at power-up is luck, and luck is a reason to hold
+    // it properly and try again.
+    if(level == I2CPadFloating) return true;
+    return (level == I2CPadHigh && fam->explains_high) ||
+           (level == I2CPadLow && fam->explains_low);
+}
+
+// One instruction, one thing the app is waiting to see. Every stage but the
+// first is left by a measurement, so the person can put the Flipper down and
+// use both hands: nothing here needs a keypress to move on.
+static void silent_draw_fix(Canvas* canvas, SilentViewModel* m) {
+    const PadFamily* fam = &pad_families[m->selected];
+    const char* title;
+    const char* l1;
+    const char* l2;
+    const char* foot = NULL;
+    bool spinner = true;
+
+    switch(m->stage) {
+    case I2CFixStrapping:
+        title = fam->want_high ? "Holding the pad high" : "Holding the pad low";
+        l1 = "Checking whether it";
+        l2 = "moves.";
+        break;
+    case I2CFixPadHeld:
+        // Not a failure to report apologetically: it is the answer. Somebody
+        // chose this in copper and the buyer could not have known.
+        title = "The board holds it";
+        l1 = fam->want_high ? "This pad is tied low on" : "This pad is tied high on";
+        l2 = "the board, not by you.";
+        foot = "Left: save the report";
+        spinner = false;
+        break;
+    case I2CFixWantPowerOff:
+        title = "Pull the power wire";
+        l1 = "Out of the sensor. Mode";
+        l2 = "pins are read at startup.";
+        foot = "Still powered.";
+        break;
+    case I2CFixWantPowerOn:
+        title = "Power is off";
+        l1 = "Plug it back in. The pad";
+        l2 = "is held for you.";
+        foot = "Waiting.";
+        break;
+    default: // I2CFixWantWire, and I2CFixDone for the frame before the rescan
+        title = "Put the wire back";
+        l1 = "On the sensor's SDA pad,";
+        l2 = "Flipper end in pin 15.";
+        foot = "Waiting for the bus.";
+        break;
+    }
+
+    if(silent_saved_recently(m)) foot = "Saved to the SD card.";
+
+    canvas_draw_str_aligned(canvas, 64, 12, AlignCenter, AlignBottom, title);
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, 64, 27, AlignCenter, AlignBottom, l1);
+    canvas_draw_str_aligned(canvas, 64, 37, AlignCenter, AlignBottom, l2);
+    if(spinner) draw_scan_spinner(canvas, 64, 48, m->frame);
+    if(foot) {
+        canvas_draw_box(canvas, 0, 55, 128, 9);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_str_aligned(canvas, 64, 62, AlignCenter, AlignBottom, foot);
+        canvas_set_color(canvas, ColorBlack);
+    }
+}
 
 static void silent_draw_callback(Canvas* canvas, void* model) {
     SilentViewModel* m = model;
     canvas_clear(canvas);
     canvas_set_font(canvas, FontPrimary);
 
-    if(m->cycling) {
-        canvas_draw_str_aligned(canvas, 64, 14, AlignCenter, AlignBottom, "Power cycle");
+    if(m->needs_fifth_wire) {
+        // The one case four wires cannot solve, said plainly rather than
+        // offered as a fix that quietly does nothing.
+        canvas_draw_str_aligned(canvas, 64, 12, AlignCenter, AlignBottom, "Needs a fifth wire");
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str_aligned(canvas, 64, 30, AlignCenter, AlignBottom, "Rail off, waiting for");
-        canvas_draw_str_aligned(canvas, 64, 40, AlignCenter, AlignBottom, "the part to boot.");
-        draw_scan_spinner(canvas, 64, 54, m->frame);
+        canvas_draw_str_aligned(
+            canvas, 64, 27, AlignCenter, AlignBottom, "This pin has to stay high");
+        canvas_draw_str_aligned(canvas, 64, 37, AlignCenter, AlignBottom, "the whole time, so it");
+        canvas_draw_str_aligned(
+            canvas, 64, 47, AlignCenter, AlignBottom, "cannot also carry SDA.");
+        canvas_draw_box(canvas, 0, 55, 128, 9);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_str_aligned(
+            canvas,
+            64,
+            62,
+            AlignCenter,
+            AlignBottom,
+            silent_saved_recently(m) ? "Saved to the SD card." : "Left: save the report");
+        canvas_set_color(canvas, ColorBlack);
+        return;
+    }
+
+    if(m->stage != I2CFixIdle) {
+        silent_draw_fix(canvas, m);
         return;
     }
 
     const PadFamily* fam = &pad_families[m->selected];
-    bool explained = (m->level == I2CPadHigh && fam->explains_high) ||
-                     (m->level == I2CPadLow && fam->explains_low);
+    bool explained = silent_pad_explains(fam, m->level);
 
     const char* title = "Pad reads FLOATING";
     if(m->level == I2CPadHigh) title = "Pad reads HIGH";
@@ -1052,8 +1183,7 @@ static void silent_draw_callback(Canvas* canvas, void* model) {
     canvas_draw_box(canvas, 0, 55, 128, 9);
     canvas_set_color(canvas, ColorWhite);
     const char* foot;
-    // ~3 seconds at the 60ms tick, then the pad explanation comes back.
-    if(m->saved_frame && m->frame - m->saved_frame < 50) {
+    if(silent_saved_recently(m)) {
         foot = "Saved to the SD card.";
     } else if(m->level == I2CPadFloating) {
         // Alternating, because the likeliest cause is not the pad at all: the
@@ -1073,7 +1203,8 @@ static void silent_enter_callback(void* context) {
         app->silent_view,
         SilentViewModel * m,
         {
-            m->cycling = false;
+            m->stage = I2CFixIdle;
+            m->needs_fifth_wire = false;
             m->saved_frame = 0;
             m->level = i2c_worker_get_pad(app->worker);
         },
@@ -1086,15 +1217,35 @@ static bool silent_input_callback(InputEvent* event, void* context) {
     if(event->type != InputTypeShort && event->type != InputTypeRepeat) return false;
 
     bool consumed = false;
-    bool start_cycle = false;
+    bool start_fix = false;
+    bool want_high = false;
+    bool back_to_meter = false;
     bool do_save = false;
     SilentDiagnosis diag = {0};
     with_view_model(
         app->silent_view,
         SilentViewModel * m,
         {
-            if(m->cycling) {
-                consumed = true; // nothing to press while the rail is down
+            bool in_fix = m->stage != I2CFixIdle || m->needs_fifth_wire;
+            if(event->key == InputKeyLeft) {
+                // Saving is allowed from every one of these screens on purpose:
+                // "the board ties this pad low" is exactly the sentence someone
+                // needs in writing at a parcel counter.
+                diag.pad_measured = true;
+                diag.pad_level = m->level;
+                diag.pad_labels = pad_families[m->selected].labels;
+                diag.pad_held = m->stage == I2CFixPadHeld;
+                diag.pad_wanted_high = pad_families[m->selected].want_high;
+                m->saved_frame = m->frame ? m->frame : 1;
+                do_save = true;
+                consumed = true;
+            } else if(event->key == InputKeyBack && in_fix) {
+                m->stage = I2CFixIdle;
+                m->needs_fifth_wire = false;
+                back_to_meter = true;
+                consumed = true;
+            } else if(in_fix) {
+                consumed = true; // the run advances on measurements, not keys
             } else if(event->key == InputKeyUp && m->selected > 0) {
                 m->selected--;
                 consumed = true;
@@ -1103,27 +1254,27 @@ static bool silent_input_callback(InputEvent* event, void* context) {
                 consumed = true;
             } else if(event->key == InputKeyOk) {
                 const PadFamily* fam = &pad_families[m->selected];
-                bool explained = (m->level == I2CPadHigh && fam->explains_high) ||
-                                 (m->level == I2CPadLow && fam->explains_low);
-                if(explained) {
-                    m->cycling = true;
-                    start_cycle = true;
+                bool explained = silent_pad_explains(fam, m->level);
+                if(explained && fam->latched) {
+                    m->stage = I2CFixStrapping;
+                    want_high = fam->want_high;
+                    start_fix = true;
+                    consumed = true;
+                } else if(explained) {
+                    m->needs_fifth_wire = true;
                     consumed = true;
                 }
-            } else if(event->key == InputKeyLeft) {
-                diag.pad_measured = true;
-                diag.pad_level = m->level;
-                diag.pad_labels = pad_families[m->selected].labels;
-                m->saved_frame = m->frame ? m->frame : 1;
-                do_save = true;
-                consumed = true;
             }
         },
         consumed);
 
-    // Outside the model lock, like every other input handler here: the cycle
-    // takes over a second and an SD write can stall for several.
-    if(start_cycle) i2c_worker_power_cycle(app->worker);
+    // Outside the model lock, like every other input handler here: the fix run
+    // waits on a person's hands and an SD write can stall for seconds.
+    if(start_fix) i2c_worker_fix_start(app->worker, want_high);
+    if(back_to_meter) {
+        i2c_worker_fix_stop(app->worker);
+        i2c_worker_pad_watch_start(app->worker);
+    }
 
     if(do_save) {
         i2c_worker_get_bus(app->worker, &diag.bus);
@@ -1140,6 +1291,7 @@ static void silent_exit_callback(void* context) {
     // the switch that is happening right now.
     if(app->current_view == FakeChipViewSilent) app->current_view = FakeChipViewScan;
     i2c_worker_pad_watch_stop(app->worker);
+    i2c_worker_fix_stop(app->worker); // releases the strap and the rail with it
 }
 
 static void worker_event_callback(I2CWorkerEvent event, void* context) {
@@ -1213,22 +1365,25 @@ static void worker_event_callback(I2CWorkerEvent event, void* context) {
     } else if(event == I2CWorkerEventPadUpdate) {
         uint8_t level = (uint8_t)i2c_worker_get_pad(app->worker);
         with_view_model(app->silent_view, SilentViewModel * m, { m->level = level; }, true);
-    } else if(event == I2CWorkerEventPowerCycled) {
-        with_view_model(app->silent_view, SilentViewModel * m, { m->cycling = false; }, false);
+    } else if(event == I2CWorkerEventFixUpdate) {
+        uint8_t stage = (uint8_t)i2c_worker_get_fix_stage(app->worker);
+        with_view_model(app->silent_view, SilentViewModel * m, { m->stage = stage; }, true);
         // Hand the rest to the dispatcher thread. This callback runs on the
         // worker, and switching views from here would drive the GUI from two
         // threads at once; the custom-event queue is the seam that exists for
         // exactly this.
-        view_dispatcher_send_custom_event(app->view_dispatcher, AppEventPowerCycled);
+        if(stage == I2CFixDone) {
+            view_dispatcher_send_custom_event(app->view_dispatcher, AppEventFixDone);
+        }
     }
 }
 
 static bool app_custom_event_callback(void* context, uint32_t event) {
     FakeChipApp* app = context;
-    if(event == AppEventPowerCycled) {
+    if(event == AppEventFixDone) {
         // Straight into a rescan with no further keypress. Whoever pressed OK
-        // is holding a wire against a pad with one hand and the Flipper with
-        // the other; asking for a second press is asking them to let go.
+        // has just finished moving a wire with one hand and holding the sensor
+        // with the other; asking for one more press is asking them to let go.
         app_start_scan(app);
         app_switch_view(app, FakeChipViewScan);
         return true;

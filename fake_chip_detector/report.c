@@ -39,6 +39,15 @@ static void report_silence(FuriString* out, const SilentDiagnosis* s) {
                             s->pad_level == I2CPadLow  ? "LOW" :
                                                          "floating";
         furi_string_cat_printf(out, "The pin marked %s measured %s.\n\n", s->pad_labels, level);
+
+        if(s->pad_held) {
+            furi_string_cat_printf(
+                out,
+                "Pulling that pin %s did not move it, so it is tied %s on the board itself. "
+                "The module was built this way and no rewiring can change it.\n\n",
+                s->pad_wanted_high ? "up" : "down",
+                s->pad_wanted_high ? "low" : "high");
+        }
     }
 
     furi_string_cat_str(

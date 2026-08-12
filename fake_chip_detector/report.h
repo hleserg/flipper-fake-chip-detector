@@ -19,6 +19,12 @@ typedef struct {
     bool pad_measured; // the user walked a wire onto a mode pad
     uint8_t pad_level; // I2CPadLevel
     const char* pad_labels; // the family of labels they said they were on
+    // A weak pull the other way was tried and lost, so the pad is tied in
+    // copper. For a buyer that is the whole answer: the seller shipped a board
+    // configured off the I2C bus, and no amount of rewiring at a counter will
+    // change it.
+    bool pad_held;
+    bool pad_wanted_high; // the level I2C needed, for the sentence above
 } SilentDiagnosis;
 
 // disputed: the buyer has said this is not the part they ordered, which turns

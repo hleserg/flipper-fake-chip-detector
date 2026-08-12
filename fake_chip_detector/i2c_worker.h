@@ -29,8 +29,20 @@ typedef enum {
     I2CWorkerEventScanDone,
     I2CWorkerEventBusUpdate,
     I2CWorkerEventPadUpdate,
-    I2CWorkerEventPowerCycled,
+    I2CWorkerEventFixUpdate,
 } I2CWorkerEvent;
+
+// Where a fix run has got to. Every step but the first ends on a measurement,
+// so the screen never says something happened that the app did not see.
+typedef enum {
+    I2CFixIdle, // not running: the pad meter owns the screen
+    I2CFixStrapping, // pulling the pad the way I2C needs it, reading it back
+    I2CFixPadHeld, // the pull lost: the board itself ties this pad
+    I2CFixWantPowerOff, // waiting for the module's pull-ups to disappear
+    I2CFixWantPowerOn, // they went; waiting for them to come back
+    I2CFixWantWire, // strap let go; waiting for the wire back on the bus
+    I2CFixDone, // bus healthy again, worth another sweep
+} I2CFixStage;
 
 // What a single pad is doing, measured with nothing but the internal pulls.
 // Input only: safe to point at a pin whose function nobody knows yet, which is
@@ -90,12 +102,18 @@ void i2c_worker_pad_watch_start(I2CWorker* worker);
 void i2c_worker_pad_watch_stop(I2CWorker* worker);
 I2CPadLevel i2c_worker_get_pad(I2CWorker* worker);
 
-// Cuts the external 3V3 rail, waits for the lines to actually fall rather than
-// trusting a delay, then restores it. Mode pins are sampled at reset, so a pad
-// the user has just strapped does nothing at all until this happens. Emits
-// I2CWorkerEventPowerCycled when the rail is back and the part has had time to
-// boot. The rail is restored on every path.
-void i2c_worker_power_cycle(I2CWorker* worker);
+// The fix run: hold the pad at want_high through a restart, then hand the bus
+// back. It straps pin 15 with the internal pull and reads it back, tries once
+// to cut the 3V3 rail itself, and when that does not move the lines it waits
+// for the person to pull the sensor's power wire and put it back -- watching
+// the module's pull-ups vanish and return rather than believing them. Ends by
+// waiting for the wire to come back onto the bus, then emits a final
+// I2CFixDone. Progress arrives as I2CWorkerEventFixUpdate; read the stage with
+// i2c_worker_get_fix_stage. The strap and the rail are released on every path,
+// including the worker shutting down.
+void i2c_worker_fix_start(I2CWorker* worker, bool want_high);
+void i2c_worker_fix_stop(I2CWorker* worker);
+I2CFixStage i2c_worker_get_fix_stage(I2CWorker* worker);
 
 uint8_t i2c_worker_get_progress(I2CWorker* worker);
 size_t i2c_worker_get_found(I2CWorker* worker, I2CFoundDevice* out, size_t max_count);
