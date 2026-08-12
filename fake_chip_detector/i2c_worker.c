@@ -399,24 +399,31 @@ static void i2c_worker_do_fix(I2CWorker* worker) {
     }
 
     // One quiet attempt at cutting the rail ourselves, so a device where that
-    // works never bothers its owner. Continue only if the lines are seen
-    // falling; on the bench they do not.
-    furi_hal_power_disable_external_3_3v();
+    // works never bothers its owner. Only counts if the module was powered to
+    // begin with and stopped being powered: a sensor that arrived here already
+    // dark would otherwise look like proof the cut worked, and the app would
+    // skip the one step that actually restarts the part.
+    bool powered_before = fix_module_powered();
     bool fell = false;
-    for(uint32_t waited = 0; waited < RAIL_TRY_MS && !worker->fix_stop; waited += 20) {
-        if(!fix_module_powered()) {
-            fell = true;
-            break;
+    if(powered_before) {
+        furi_hal_power_disable_external_3_3v();
+        for(uint32_t waited = 0; waited < RAIL_TRY_MS && !worker->fix_stop; waited += 20) {
+            if(!fix_module_powered()) {
+                fell = true;
+                break;
+            }
+            furi_delay_ms(20);
         }
-        furi_delay_ms(20);
+        furi_hal_power_enable_external_3_3v();
     }
-    furi_hal_power_enable_external_3_3v();
 
     if(!fell) {
-        fix_set(worker, I2CFixWantPowerOff);
-        if(!fix_wait_power(worker, false)) {
-            fix_strap_release();
-            return;
+        if(powered_before) {
+            fix_set(worker, I2CFixWantPowerOff);
+            if(!fix_wait_power(worker, false)) {
+                fix_strap_release();
+                return;
+            }
         }
         fix_set(worker, I2CFixWantPowerOn);
         if(!fix_wait_power(worker, true)) {
