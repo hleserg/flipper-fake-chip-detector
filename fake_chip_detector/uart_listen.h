@@ -1,0 +1,42 @@
+#pragma once
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+// LPUART on the same two header pins the I2C bus uses: PC1 is pin 15 and PC0 is
+// pin 16, which is why any of this is possible on four wires. Nothing has to be
+// re-plugged to go from scanning I2C to listening on a serial line -- and a
+// sensor strapped into UART mode puts its Tx on the pad silkscreened SCL, which
+// is already sitting in pin 16.
+//
+// Everything here blocks and is meant to be called from a worker thread, never
+// from a draw or input callback.
+
+#define UART_LISTEN_MAX_SAMPLE 32
+
+typedef struct {
+    uint32_t baud; // the rate this result was gathered at
+    size_t bytes; // how many arrived inside the window
+    uint32_t frame_errors; // wrong-rate traffic shows up here, not as bytes
+    uint8_t sample[UART_LISTEN_MAX_SAMPLE]; // the first bytes, for the report
+    size_t sample_len;
+} UartListenResult;
+
+// Why the sweep and not one guess: the rate is not knowable in advance, and a
+// wrong one turns real traffic into framing errors rather than silence. The
+// winner is the rate that produced bytes *without* them.
+bool uart_listen_sweep(
+    const uint32_t* bauds,
+    size_t baud_count,
+    uint32_t window_ms,
+    UartListenResult* out);
+
+// Loopback self-test: with a jumper from pin 15 to pin 16 this proves the whole
+// path -- expansion service stood down, handle acquired, pinout as documented,
+// framing, transmit, the interrupt-context receive, and a clean release. It is
+// the only way to test the transport without owning a UART sensor, and it uses
+// one wire the user already has.
+//
+// detail receives a short human-readable line either way; pass NULL to skip.
+bool uart_selftest_loopback(uint32_t baud, char* detail, size_t detail_size);
