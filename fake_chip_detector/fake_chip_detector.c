@@ -41,6 +41,7 @@ typedef enum {
     FakeChipViewReport,
     FakeChipViewSaved,
     FakeChipViewOneWire,
+    FakeChipViewSilent,
     FakeChipViewTests,
     FakeChipViewTestHelp,
     FakeChipViewAbout,
@@ -138,6 +139,24 @@ typedef struct {
     char message[LIVE_TEST_LINE_LEN];
 } TestsViewModel;
 
+// Things the worker thread needs the dispatcher thread to do. The worker may
+// touch view models under their own lock, but navigation belongs to the thread
+// that owns the event loop.
+typedef enum {
+    AppEventPowerCycled = 1,
+} AppCustomEvent;
+
+typedef struct {
+    uint8_t selected; // which family of pad labels the user says they are on
+    uint8_t level; // I2CPadLevel, as last settled by the meter
+    uint32_t frame;
+    bool cycling; // the rail is down and we are waiting for the part to boot
+    // Frame the report was written on, or 0. A save nobody is told about is
+    // the same as no save: the footer says so for a few seconds and then goes
+    // back to explaining the pad.
+    uint32_t saved_frame;
+} SilentViewModel;
+
 typedef struct {
     Gui* gui;
     ViewDispatcher* view_dispatcher;
@@ -150,6 +169,7 @@ typedef struct {
     View* chips_view;
     View* saved_view;
     View* onewire_view;
+    View* silent_view;
     View* tests_view;
     View* test_help_view;
     TextBox* report_box;
@@ -551,7 +571,11 @@ static void scan_draw_callback(Canvas* canvas, void* model) {
     }
 
     if(m->found_count == 0) {
-        canvas_draw_str_aligned(canvas, 64, 11, AlignCenter, AlignBottom, "No devices found");
+        // "No devices found" is a verdict about the world. "No I2C answer" is
+        // a statement about what happened, and the difference is not cosmetic:
+        // someone read the old headline as a conclusion, pressed nothing else,
+        // and handed a working sensor back to a courier.
+        canvas_draw_str_aligned(canvas, 64, 11, AlignCenter, AlignBottom, "No I2C answer");
         canvas_set_font(canvas, FontSecondary);
 
         // Hints keyed to what the electrical check actually saw
@@ -575,19 +599,27 @@ static void scan_draw_callback(Canvas* canvas, void* model) {
             break;
         default:
             // The sweep covers 0x08-0x77, so a wrong address is not one of the
-            // possibilities. A part strapped into UART mode is: it is powered,
-            // its pull-ups still hold the bus high, and it will never answer an
-            // I2C address because it does not have one. A BNO055 with PS1 high
-            // looks exactly like a dead chip from here unless we say so.
-            l1 = "Bus is electrically OK.";
-            l2 = "SDA/SCL swapped, dead";
-            l3 = "chip, or in UART mode.";
+            // possibilities. A mode pin is: a part strapped to SPI or UART is
+            // powered, its pull-ups still hold the bus high, and it will never
+            // answer an address because in that state it does not have one.
+            l1 = "Board has power and its";
+            l2 = "pull-ups are there. Some";
+            l3 = "chips boot with I2C off.";
             break;
         }
         canvas_draw_str_aligned(canvas, 64, 26, AlignCenter, AlignBottom, l1);
         canvas_draw_str_aligned(canvas, 64, 36, AlignCenter, AlignBottom, l2);
         canvas_draw_str_aligned(canvas, 64, 46, AlignCenter, AlignBottom, l3);
-        canvas_draw_str_aligned(canvas, 64, 62, AlignCenter, AlignBottom, "OK = rescan");
+
+        // The offer, not a full stop. The third line used to be the last item
+        // in a list of bad possibilities with nothing attached to it.
+        canvas_draw_box(canvas, 0, 55, 128, 9);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_draw_str(canvas, 4, 62, "OK");
+        canvas_draw_str(canvas, 20, 62, "rescan");
+        canvas_draw_str_aligned(canvas, 124, 62, AlignRight, AlignBottom, "find out");
+        draw_right_key(canvas, 124 - canvas_string_width(canvas, "find out") - 9, 61);
+        canvas_set_color(canvas, ColorBlack);
         return;
     }
 
@@ -721,6 +753,7 @@ static bool scan_save_log(
     const I2CFoundDevice* found,
     uint8_t count,
     bool disputed,
+    const SilentDiagnosis* silent,
     char* out_name,
     size_t out_name_size) {
     Storage* storage = furi_record_open(RECORD_STORAGE);
@@ -739,7 +772,7 @@ static bool scan_save_log(
     File* file = storage_file_alloc(storage);
     if(storage_file_open(file, furi_string_get_cstr(path), FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
         FuriString* text = furi_string_alloc();
-        report_build(text, found, count, disputed, &dt);
+        report_build(text, found, count, disputed, &dt, silent);
         size_t len = furi_string_size(text);
         ok = storage_file_write(file, furi_string_get_cstr(text), len) == len;
         furi_string_free(text);
@@ -760,7 +793,7 @@ static void app_start_live_test(
 
 // Snapshots the results and writes the report outside the model lock: SD
 // writes can stall for seconds and must never hold up the GUI.
-static void app_save_log(FakeChipApp* app, bool disputed) {
+static void app_save_log(FakeChipApp* app, bool disputed, const SilentDiagnosis* silent) {
     I2CFoundDevice* snapshot = malloc(sizeof(I2CFoundDevice) * I2C_SCAN_MAX_FOUND);
     uint8_t count = 0;
     with_view_model(
@@ -774,7 +807,7 @@ static void app_save_log(FakeChipApp* app, bool disputed) {
         false);
 
     char name[32] = {0};
-    bool saved = scan_save_log(snapshot, count, disputed, name, sizeof(name));
+    bool saved = scan_save_log(snapshot, count, disputed, silent, name, sizeof(name));
     free(snapshot);
 
     with_view_model(
@@ -818,6 +851,7 @@ static bool scan_input_callback(InputEvent* event, void* context) {
     bool answered_wrong = false;
     bool disputed = false;
     bool show_report = false;
+    bool open_silent = false;
     const LiveTest* start_live = NULL;
     uint8_t live_addr = 0;
 
@@ -881,6 +915,11 @@ static bool scan_input_callback(InputEvent* event, void* context) {
                         m->scroll = m->selected - SCAN_LIST_ROWS + 1;
                     consumed = true;
                 } else if(
+                    event->key == InputKeyRight && m->found_count == 0 &&
+                    event->type == InputTypeShort) {
+                    open_silent = true; // the only screen that can still help
+                    consumed = true;
+                } else if(
                     event->key == InputKeyRight && m->found_count > 0 &&
                     event->type == InputTypeShort) {
                     if(m->found_count == 1 && m->answer != AnswerAsking) {
@@ -902,11 +941,13 @@ static bool scan_input_callback(InputEvent* event, void* context) {
     if(show_report) app_show_report(app, disputed);
 
     if(do_save) {
-        app_save_log(app, disputed);
+        app_save_log(app, disputed, NULL);
         i2c_notify_play(app->notifications, I2CNotifyNeutral);
     }
 
     if(rescan) app_start_scan(app);
+
+    if(open_silent) app_switch_view(app, FakeChipViewSilent);
 
     if(open_detail) {
         I2CFoundDevice selected_dev;
@@ -929,6 +970,176 @@ static bool scan_input_callback(InputEvent* event, void* context) {
         }
     }
     return consumed;
+}
+
+/* ---------------- Silent bus ---------------- */
+
+// Where someone goes after a scan finds nothing and the wiring is fine. The
+// question it answers is not "what chip is this" but "is it broken", and the
+// two have different evidence: a part strapped to SPI or UART is healthy,
+// powered and completely unable to answer an I2C address.
+//
+// It asks about the pad rather than the chip on purpose. The user arrived here
+// because nothing identified itself, so a list of chip names invites a
+// confident explanation of the wrong part - and the pad's label is printed on
+// the board in their hand.
+#define SILENT_ROWS 4
+
+typedef struct {
+    const char* labels; // what the board might silkscreen for this kind of pin
+    const char* when_high;
+    const char* when_low;
+    bool explains_high; // this level is a reason the part cannot answer
+    bool explains_low;
+} PadFamily;
+
+static const PadFamily pad_families[SILENT_ROWS] = {
+    // The SPI class: BME280, BMP280, most ST and ADI accelerometers. Every one
+    // of them wants this pad high to stay on I2C.
+    {"CS  CSB  NSS", "High = I2C. Not this.", "Low picks SPI. This is it.", false, true},
+    // Protocol select proper, which is the BNO055 case.
+    {"PS0  PS1  SEL", "High picks UART or SPI.", "Low picks I2C. Not this.", true, false},
+    // Not a protocol at all: the part is simply held off.
+    {"XSHUT  RES  EN", "High = enabled. Not this.", "Low holds it in reset.", false, true},
+    // Ruling something out is progress and should read as progress.
+    {"AD0  ADR  SDO", "Address only - all swept.", "Address only - all swept.", false, false},
+};
+
+static void silent_draw_callback(Canvas* canvas, void* model) {
+    SilentViewModel* m = model;
+    canvas_clear(canvas);
+    canvas_set_font(canvas, FontPrimary);
+
+    if(m->cycling) {
+        canvas_draw_str_aligned(canvas, 64, 14, AlignCenter, AlignBottom, "Power cycle");
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str_aligned(canvas, 64, 30, AlignCenter, AlignBottom, "Rail off, waiting for");
+        canvas_draw_str_aligned(canvas, 64, 40, AlignCenter, AlignBottom, "the part to boot.");
+        draw_scan_spinner(canvas, 64, 54, m->frame);
+        return;
+    }
+
+    const PadFamily* fam = &pad_families[m->selected];
+    bool explained = (m->level == I2CPadHigh && fam->explains_high) ||
+                     (m->level == I2CPadLow && fam->explains_low);
+
+    const char* title = "Pad reads FLOATING";
+    if(m->level == I2CPadHigh) title = "Pad reads HIGH";
+    if(m->level == I2CPadLow) title = "Pad reads LOW";
+    canvas_draw_str_aligned(canvas, 2, 10, AlignLeft, AlignBottom, title);
+
+    canvas_set_font(canvas, FontSecondary);
+    // The fix is offered only once the reading and the chosen pad actually
+    // form a cause; before that there is nothing to fix and saying so would be
+    // a guess. Left saves either way -- Down belongs to the list, and the hint
+    // yields to the stronger action rather than the key going away.
+    canvas_draw_str_aligned(
+        canvas, 126, 10, AlignRight, AlignBottom, explained ? "OK fix" : "< save");
+    for(uint8_t row = 0; row < SILENT_ROWS; row++) {
+        uint8_t y = 22 + row * 10;
+        bool sel = (row == m->selected);
+        if(sel) {
+            canvas_draw_box(canvas, 0, y - 8, 128, 10);
+            canvas_set_color(canvas, ColorWhite);
+        }
+        canvas_draw_str(canvas, 4, y, pad_families[row].labels);
+        if(sel) canvas_set_color(canvas, ColorBlack);
+    }
+
+    // The footer is the whole point: it turns a bare level into a reason, and
+    // it changes as the cursor moves so nobody has to hold a lookup table in
+    // their head at a counter.
+    canvas_draw_box(canvas, 0, 55, 128, 9);
+    canvas_set_color(canvas, ColorWhite);
+    const char* foot;
+    // ~3 seconds at the 60ms tick, then the pad explanation comes back.
+    if(m->saved_frame && m->frame - m->saved_frame < 50) {
+        foot = "Saved to the SD card.";
+    } else if(m->level == I2CPadFloating) {
+        // Alternating, because the likeliest cause is not the pad at all: the
+        // wire got moved at the Flipper end instead of the sensor end.
+        foot = (m->frame / 24) % 2 ? "Wire still in pin 15?" : "Nothing drives this pad.";
+    } else {
+        foot = m->level == I2CPadHigh ? fam->when_high : fam->when_low;
+    }
+    canvas_draw_str_aligned(canvas, 64, 62, AlignCenter, AlignBottom, foot);
+    canvas_set_color(canvas, ColorBlack);
+}
+
+static void silent_enter_callback(void* context) {
+    FakeChipApp* app = context;
+    app->current_view = FakeChipViewSilent;
+    with_view_model(
+        app->silent_view,
+        SilentViewModel * m,
+        {
+            m->cycling = false;
+            m->saved_frame = 0;
+            m->level = i2c_worker_get_pad(app->worker);
+        },
+        true);
+    i2c_worker_pad_watch_start(app->worker);
+}
+
+static bool silent_input_callback(InputEvent* event, void* context) {
+    FakeChipApp* app = context;
+    if(event->type != InputTypeShort && event->type != InputTypeRepeat) return false;
+
+    bool consumed = false;
+    bool start_cycle = false;
+    bool do_save = false;
+    SilentDiagnosis diag = {0};
+    with_view_model(
+        app->silent_view,
+        SilentViewModel * m,
+        {
+            if(m->cycling) {
+                consumed = true; // nothing to press while the rail is down
+            } else if(event->key == InputKeyUp && m->selected > 0) {
+                m->selected--;
+                consumed = true;
+            } else if(event->key == InputKeyDown && m->selected + 1 < SILENT_ROWS) {
+                m->selected++;
+                consumed = true;
+            } else if(event->key == InputKeyOk) {
+                const PadFamily* fam = &pad_families[m->selected];
+                bool explained = (m->level == I2CPadHigh && fam->explains_high) ||
+                                 (m->level == I2CPadLow && fam->explains_low);
+                if(explained) {
+                    m->cycling = true;
+                    start_cycle = true;
+                    consumed = true;
+                }
+            } else if(event->key == InputKeyLeft) {
+                diag.pad_measured = true;
+                diag.pad_level = m->level;
+                diag.pad_labels = pad_families[m->selected].labels;
+                m->saved_frame = m->frame ? m->frame : 1;
+                do_save = true;
+                consumed = true;
+            }
+        },
+        consumed);
+
+    // Outside the model lock, like every other input handler here: the cycle
+    // takes over a second and an SD write can stall for several.
+    if(start_cycle) i2c_worker_power_cycle(app->worker);
+
+    if(do_save) {
+        i2c_worker_get_bus(app->worker, &diag.bus);
+        app_save_log(app, false, &diag);
+        i2c_notify_play(app->notifications, I2CNotifyNeutral);
+    }
+    return consumed;
+}
+
+static void silent_exit_callback(void* context) {
+    FakeChipApp* app = context;
+    // Guarded, never unconditional: the dispatcher runs this after the next
+    // view has already claimed the slot, so an unconditional assignment undoes
+    // the switch that is happening right now.
+    if(app->current_view == FakeChipViewSilent) app->current_view = FakeChipViewScan;
+    i2c_worker_pad_watch_stop(app->worker);
 }
 
 static void worker_event_callback(I2CWorkerEvent event, void* context) {
@@ -975,7 +1186,7 @@ static void worker_event_callback(I2CWorkerEvent event, void* context) {
             }
             i2c_notify_play(app->notifications, kind);
 
-            if(app->settings.autosave && count > 0) app_save_log(app, false);
+            if(app->settings.autosave && count > 0) app_save_log(app, false, NULL);
         }
     } else if(event == I2CWorkerEventBusUpdate) {
         I2CBusCheck bus;
@@ -999,7 +1210,30 @@ static void worker_event_callback(I2CWorkerEvent event, void* context) {
         // Chirp once per transition, never on every poll
         if(became_connected) i2c_notify_play(app->notifications, I2CNotifyGenuine);
         if(became_wrong) i2c_notify_play(app->notifications, I2CNotifyAttention);
+    } else if(event == I2CWorkerEventPadUpdate) {
+        uint8_t level = (uint8_t)i2c_worker_get_pad(app->worker);
+        with_view_model(app->silent_view, SilentViewModel * m, { m->level = level; }, true);
+    } else if(event == I2CWorkerEventPowerCycled) {
+        with_view_model(app->silent_view, SilentViewModel * m, { m->cycling = false; }, false);
+        // Hand the rest to the dispatcher thread. This callback runs on the
+        // worker, and switching views from here would drive the GUI from two
+        // threads at once; the custom-event queue is the seam that exists for
+        // exactly this.
+        view_dispatcher_send_custom_event(app->view_dispatcher, AppEventPowerCycled);
     }
+}
+
+static bool app_custom_event_callback(void* context, uint32_t event) {
+    FakeChipApp* app = context;
+    if(event == AppEventPowerCycled) {
+        // Straight into a rescan with no further keypress. Whoever pressed OK
+        // is holding a wire against a pad with one hand and the Flipper with
+        // the other; asking for a second press is asking them to let go.
+        app_start_scan(app);
+        app_switch_view(app, FakeChipViewScan);
+        return true;
+    }
+    return false;
 }
 
 /* ---------------- Wiring enter/exit ---------------- */
@@ -1901,7 +2135,7 @@ static void app_show_report(FakeChipApp* app, bool disputed) {
 
     DateTime dt;
     furi_hal_rtc_get_datetime(&dt);
-    report_build(app->report_text, snapshot, count, disputed, &dt);
+    report_build(app->report_text, snapshot, count, disputed, &dt, NULL);
     free(snapshot);
 
     app_present_report(app, nav_to_scan);
@@ -2333,6 +2567,9 @@ static int32_t anim_thread_worker(void* context) {
         case FakeChipViewLive:
             with_view_model(app->live_view, LiveViewModel * m, { m->frame++; }, true);
             break;
+        case FakeChipViewSilent:
+            with_view_model(app->silent_view, SilentViewModel * m, { m->frame++; }, true);
+            break;
         default:
             break; // menus and static screens need no ticks
         }
@@ -2440,6 +2677,8 @@ static FakeChipApp* fake_chip_app_alloc(void) {
     app->notifications = furi_record_open(RECORD_NOTIFICATION);
     app->view_dispatcher = view_dispatcher_alloc();
     view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
+    view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
+    view_dispatcher_set_custom_event_callback(app->view_dispatcher, app_custom_event_callback);
     app->current_view = FakeChipViewMenu;
 
     if(app->settings.backlight) {
@@ -2544,6 +2783,16 @@ static FakeChipApp* fake_chip_app_alloc(void) {
     view_set_previous_callback(app->onewire_view, nav_to_menu);
     view_dispatcher_add_view(app->view_dispatcher, FakeChipViewOneWire, app->onewire_view);
 
+    app->silent_view = view_alloc();
+    view_set_context(app->silent_view, app);
+    view_allocate_model(app->silent_view, ViewModelTypeLocking, sizeof(SilentViewModel));
+    view_set_draw_callback(app->silent_view, silent_draw_callback);
+    view_set_input_callback(app->silent_view, silent_input_callback);
+    view_set_enter_callback(app->silent_view, silent_enter_callback);
+    view_set_exit_callback(app->silent_view, silent_exit_callback);
+    view_set_previous_callback(app->silent_view, nav_to_scan);
+    view_dispatcher_add_view(app->view_dispatcher, FakeChipViewSilent, app->silent_view);
+
     app->saved_view = view_alloc();
     view_set_context(app->saved_view, app);
     view_allocate_model(app->saved_view, ViewModelTypeLocking, sizeof(SavedViewModel));
@@ -2618,6 +2867,7 @@ static void fake_chip_app_free(FakeChipApp* app) {
     view_dispatcher_remove_view(app->view_dispatcher, FakeChipViewReport);
     view_dispatcher_remove_view(app->view_dispatcher, FakeChipViewSaved);
     view_dispatcher_remove_view(app->view_dispatcher, FakeChipViewOneWire);
+    view_dispatcher_remove_view(app->view_dispatcher, FakeChipViewSilent);
     view_dispatcher_remove_view(app->view_dispatcher, FakeChipViewTests);
     view_dispatcher_remove_view(app->view_dispatcher, FakeChipViewTestHelp);
     view_dispatcher_remove_view(app->view_dispatcher, FakeChipViewAbout);
@@ -2631,6 +2881,7 @@ static void fake_chip_app_free(FakeChipApp* app) {
     view_free(app->chips_view);
     view_free(app->saved_view);
     view_free(app->onewire_view);
+    view_free(app->silent_view);
     text_box_free(app->report_box);
     furi_string_free(app->report_text);
     variable_item_list_free(app->settings_list);

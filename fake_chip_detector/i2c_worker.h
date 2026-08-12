@@ -28,7 +28,18 @@ typedef enum {
     I2CWorkerEventScanProgress,
     I2CWorkerEventScanDone,
     I2CWorkerEventBusUpdate,
+    I2CWorkerEventPadUpdate,
+    I2CWorkerEventPowerCycled,
 } I2CWorkerEvent;
+
+// What a single pad is doing, measured with nothing but the internal pulls.
+// Input only: safe to point at a pin whose function nobody knows yet, which is
+// the whole premise of handing this to someone at a parcel counter.
+typedef enum {
+    I2CPadFloating, // nothing holds it either way
+    I2CPadHigh, // driven high, or tied to a rail
+    I2CPadLow, // driven low, or tied to ground
+} I2CPadLevel;
 
 // Result of the electrical sanity check performed before a scan.
 typedef enum {
@@ -69,6 +80,23 @@ bool i2c_worker_is_busy(I2CWorker* worker);
 void i2c_worker_watch_start(I2CWorker* worker);
 void i2c_worker_watch_stop(I2CWorker* worker);
 void i2c_worker_get_bus(I2CWorker* worker, I2CBusCheck* out);
+
+// Pad-meter mode: polls pin 15 (SDA) as a bare input so the user can walk that
+// wire onto a mode pin and watch the level. Emits I2CWorkerEventPadUpdate.
+// A level only changes after several agreeing reads: a finger resting on a
+// floating pad drags it around, and a display that flickers is a display
+// nobody trusts.
+void i2c_worker_pad_watch_start(I2CWorker* worker);
+void i2c_worker_pad_watch_stop(I2CWorker* worker);
+I2CPadLevel i2c_worker_get_pad(I2CWorker* worker);
+
+// Cuts the external 3V3 rail, waits for the lines to actually fall rather than
+// trusting a delay, then restores it. Mode pins are sampled at reset, so a pad
+// the user has just strapped does nothing at all until this happens. Emits
+// I2CWorkerEventPowerCycled when the rail is back and the part has had time to
+// boot. The rail is restored on every path.
+void i2c_worker_power_cycle(I2CWorker* worker);
+
 uint8_t i2c_worker_get_progress(I2CWorker* worker);
 size_t i2c_worker_get_found(I2CWorker* worker, I2CFoundDevice* out, size_t max_count);
 

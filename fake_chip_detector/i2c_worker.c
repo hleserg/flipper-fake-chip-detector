@@ -3,6 +3,7 @@
 #include <furi.h>
 #include <furi_hal_i2c.h>
 #include <furi_hal_gpio.h>
+#include <furi_hal_power.h>
 #include <furi_hal_resources.h>
 
 #define TAG "I2CWorker"
@@ -10,7 +11,22 @@
 #define WORKER_FLAG_SCAN  (1UL << 0)
 #define WORKER_FLAG_EXIT  (1UL << 1)
 #define WORKER_FLAG_WATCH (1UL << 3)
-#define WORKER_FLAG_ALL   (WORKER_FLAG_SCAN | WORKER_FLAG_EXIT | WORKER_FLAG_WATCH)
+#define WORKER_FLAG_PAD   (1UL << 4)
+#define WORKER_FLAG_POWER (1UL << 5)
+#define WORKER_FLAG_ALL \
+    (WORKER_FLAG_SCAN | WORKER_FLAG_EXIT | WORKER_FLAG_WATCH | WORKER_FLAG_PAD | WORKER_FLAG_POWER)
+
+// How many agreeing reads it takes to move the pad meter. At 50ms a read that
+// is a fifth of a second of steadiness, which is short enough to feel live and
+// long enough that a hand near a floating pad does not make it flicker.
+#define PAD_SETTLE_READS 4
+
+// Bounds on the power cycle. The rail is watched down rather than waited out,
+// but a module with a fat bulk capacitor can hold itself up for a while and
+// something has to end the wait. The boot delay afterwards is the longest
+// power-on time among the parts in the database, rounded up.
+#define POWER_DOWN_MAX_MS 2000
+#define POWER_BOOT_MS     650
 
 struct I2CWorker {
     FuriThread* thread;
@@ -19,7 +35,9 @@ struct I2CWorker {
     void* callback_context;
     volatile bool busy;
     volatile bool watch_stop;
+    volatile bool pad_stop;
     volatile bool scan_abort;
+    volatile uint8_t pad_level; // I2CPadLevel
     volatile uint32_t probe_timeout_ms;
     volatile uint8_t progress_addr;
     I2CFoundDevice found[I2C_SCAN_MAX_FOUND];
@@ -266,6 +284,60 @@ static void i2c_worker_do_watch(I2CWorker* worker) {
     }
 }
 
+// The pad meter. Deliberately the same measurement the bus check already
+// makes, pointed at whatever the user has walked the pin-15 wire onto: the
+// internal pulls are ~40k, so anything actually driving the pad or tying it to
+// a rail wins, and a pad connected to nothing shows as floating.
+static I2CPadLevel i2c_pad_read(void) {
+    bool stuck_low = false;
+    bool high_against_pulldown = i2c_line_probe(&gpio_ext_pc1, &stuck_low);
+    if(stuck_low) return I2CPadLow;
+    if(high_against_pulldown) return I2CPadHigh;
+    return I2CPadFloating;
+}
+
+static void i2c_worker_do_pad_watch(I2CWorker* worker) {
+    I2CPadLevel shown = (I2CPadLevel)worker->pad_level;
+    I2CPadLevel candidate = shown;
+    uint8_t agreed = 0;
+
+    while(!worker->pad_stop) {
+        I2CPadLevel now = i2c_pad_read();
+        if(now == candidate) {
+            if(agreed < PAD_SETTLE_READS) agreed++;
+        } else {
+            candidate = now;
+            agreed = 1;
+        }
+        if(agreed >= PAD_SETTLE_READS && candidate != shown) {
+            shown = candidate;
+            worker->pad_level = (uint8_t)shown;
+            i2c_worker_notify(worker, I2CWorkerEventPadUpdate);
+        }
+        furi_delay_ms(50);
+    }
+}
+
+// Both halves live here with nothing between them that can return early: an
+// app that exits leaving the user's sensor unpowered is worse than one that
+// never offered to cycle it.
+static void i2c_worker_do_power_cycle(I2CWorker* worker) {
+    furi_hal_power_disable_external_3_3v();
+
+    // Watch the rail fall instead of guessing how long it takes. A module's
+    // pull-ups hold the lines high for as long as its bulk capacitor lasts, so
+    // the lines going quiet is the actual signal that the part lost power.
+    for(uint32_t waited = 0; waited < POWER_DOWN_MAX_MS; waited += 20) {
+        bool stuck = false;
+        if(!i2c_line_probe(&gpio_ext_pc0, &stuck) && !i2c_line_probe(&gpio_ext_pc1, &stuck)) break;
+        furi_delay_ms(20);
+    }
+
+    furi_hal_power_enable_external_3_3v();
+    furi_delay_ms(POWER_BOOT_MS);
+    i2c_worker_notify(worker, I2CWorkerEventPowerCycled);
+}
+
 static int32_t i2c_worker_thread(void* context) {
     I2CWorker* worker = context;
     for(;;) {
@@ -282,7 +354,20 @@ static int32_t i2c_worker_thread(void* context) {
             i2c_worker_do_watch(worker);
             worker->busy = false;
         }
+        if(flags & WORKER_FLAG_PAD) {
+            worker->busy = true;
+            i2c_worker_do_pad_watch(worker);
+            worker->busy = false;
+        }
+        if(flags & WORKER_FLAG_POWER) {
+            worker->busy = true;
+            i2c_worker_do_power_cycle(worker);
+            worker->busy = false;
+        }
     }
+    // Never leave the bench dark: whatever the app was doing, the sensor gets
+    // its rail back before this thread stops answering.
+    furi_hal_power_enable_external_3_3v();
     return 0;
 }
 
@@ -348,6 +433,26 @@ void i2c_worker_watch_start(I2CWorker* worker) {
 
 void i2c_worker_watch_stop(I2CWorker* worker) {
     worker->watch_stop = true;
+}
+
+void i2c_worker_pad_watch_start(I2CWorker* worker) {
+    worker->pad_stop = false;
+    worker->watch_stop = true; // the bus watcher and the pad meter share pin 15
+    furi_thread_flags_set(furi_thread_get_id(worker->thread), WORKER_FLAG_PAD);
+}
+
+void i2c_worker_pad_watch_stop(I2CWorker* worker) {
+    worker->pad_stop = true;
+}
+
+I2CPadLevel i2c_worker_get_pad(I2CWorker* worker) {
+    return (I2CPadLevel)worker->pad_level;
+}
+
+void i2c_worker_power_cycle(I2CWorker* worker) {
+    worker->watch_stop = true; // nothing may probe the lines while they fall
+    worker->pad_stop = true;
+    furi_thread_flags_set(furi_thread_get_id(worker->thread), WORKER_FLAG_POWER);
 }
 
 void i2c_worker_get_bus(I2CWorker* worker, I2CBusCheck* out) {
