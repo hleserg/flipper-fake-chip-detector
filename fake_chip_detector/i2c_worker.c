@@ -333,6 +333,12 @@ static void i2c_worker_do_pad_watch(I2CWorker* worker) {
 /* ---- the fix run ---- */
 
 static void fix_set(I2CWorker* worker, I2CFixStage stage) {
+    // Silent once the screen has walked away. Several steps here cannot be
+    // interrupted mid-measurement, so a stop can arrive while one is still
+    // finishing; announcing the next stage afterwards would drag the user back
+    // into a screen they just left, and the last of those stages would kick off
+    // a rescan nobody asked for.
+    if(worker->fix_stop) return;
     worker->fix_stage = (uint8_t)stage;
     i2c_worker_notify(worker, I2CWorkerEventFixUpdate);
 }
