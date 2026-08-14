@@ -23,10 +23,24 @@ typedef struct {
     size_t sample_len;
 } UartListenResult;
 
+// Three outcomes, not two, and the third is the reason this is an enum. A
+// caller handed a plain false cannot tell "listened and heard nothing" from
+// "never got to listen", and will eventually print the first while meaning the
+// second -- which is the app claiming a measurement it did not make, about the
+// one screen a user reaches when they are already being told bad news.
+// "Nothing established" is the zero value on purpose, the same way I2CPadUnknown
+// is: a zeroed variable, or a caller who forgets to look, then defaults to the
+// answer that claims the least.
+typedef enum {
+    UartListenUnavailable, // never listened: LPUART busy, or not on PC0/PC1
+    UartListenSilent, // the sweep ran and every rate came back empty
+    UartListenHeard, // something was transmitting; the result is filled in
+} UartListenOutcome;
+
 // Why the sweep and not one guess: the rate is not knowable in advance, and a
 // wrong one turns real traffic into framing errors rather than silence. The
 // winner is the rate that produced bytes *without* them.
-bool uart_listen_sweep(
+UartListenOutcome uart_listen_sweep(
     const uint32_t* bauds,
     size_t baud_count,
     uint32_t window_ms,

@@ -65,7 +65,13 @@ static bool uart_pinout_is_expected(FuriHalSerialHandle* handle) {
 // is trying to report.
 typedef bool (*UartSession)(FuriHalSerialHandle* handle, UartRxContext* rx, void* context);
 
-static bool uart_with_lpuart(uint32_t baud, UartSession body, void* context) {
+//
+// ran, when given, reports whether the body was reached at all. Every reason it
+// might not be -- the handle held elsewhere, the peripheral on different pins --
+// leaves the caller knowing nothing about the wire, which is a different answer
+// from having listened and heard silence.
+static bool uart_with_lpuart(uint32_t baud, UartSession body, void* context, bool* ran) {
+    if(ran) *ran = false;
     if(!body) return false;
 
     Expansion* expansion = uart_expansion_stand_down();
@@ -90,6 +96,7 @@ static bool uart_with_lpuart(uint32_t baud, UartSession body, void* context) {
                 .frame_errors = 0,
             };
             furi_hal_serial_async_rx_start(handle, uart_rx_callback, &rx, true);
+            if(ran) *ran = true;
             ok = body(handle, &rx, context);
             furi_hal_serial_async_rx_stop(handle);
             furi_stream_buffer_free(rx.rx);
@@ -165,20 +172,23 @@ static bool uart_listen_body(FuriHalSerialHandle* handle, UartRxContext* rx, voi
     return job->found;
 }
 
-bool uart_listen_sweep(
+UartListenOutcome uart_listen_sweep(
     const uint32_t* bauds,
     size_t baud_count,
     uint32_t window_ms,
     UartListenResult* out) {
     furi_check(out);
     memset(out, 0, sizeof(*out));
-    if(!bauds || !baud_count) return false;
+    if(!bauds || !baud_count) return UartListenUnavailable;
 
     ListenJob job = {.bauds = bauds, .baud_count = baud_count, .window_ms = window_ms};
-    if(!uart_with_lpuart(bauds[0], uart_listen_body, &job)) return false;
+    bool ran = false;
+    bool heard = uart_with_lpuart(bauds[0], uart_listen_body, &job, &ran);
+    if(!ran) return UartListenUnavailable;
+    if(!heard) return UartListenSilent;
 
     *out = job.best;
-    return job.found;
+    return UartListenHeard;
 }
 
 /* ---- loopback self-test ---- */
@@ -216,7 +226,7 @@ static bool uart_selftest_body(FuriHalSerialHandle* handle, UartRxContext* rx, v
 bool uart_selftest_loopback(uint32_t baud, char* detail, size_t detail_size) {
     if(detail && detail_size) snprintf(detail, detail_size, "LPUART unavailable");
     char line[32] = {0};
-    bool ok = uart_with_lpuart(baud, uart_selftest_body, line);
+    bool ok = uart_with_lpuart(baud, uart_selftest_body, line, NULL);
     if(detail && detail_size && line[0]) snprintf(detail, detail_size, "%s", line);
     return ok;
 }
