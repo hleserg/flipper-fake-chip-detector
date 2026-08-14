@@ -49,6 +49,7 @@ struct I2CWorker {
     volatile bool scan_abort;
     volatile uint8_t pad_level; // I2CPadLevel
     volatile uint8_t fix_stage; // I2CFixStage
+    volatile uint32_t fix_gen; // bumped per run so an abandoned one cannot resume
     volatile bool fix_want_high; // level the pad has to sit at for I2C
     volatile uint32_t probe_timeout_ms;
     volatile uint8_t progress_addr;
@@ -332,13 +333,26 @@ static void i2c_worker_do_pad_watch(I2CWorker* worker) {
 
 /* ---- the fix run ---- */
 
-static void fix_set(I2CWorker* worker, I2CFixStage stage) {
+// Is the run that owns this generation still the one the screen is waiting on?
+//
+// fix_stop alone is not enough. Leaving the screen sets it, but starting a new
+// run clears it again, and a run can be up to POWER_BOOT_MS deep in a delay it
+// cannot check anything from. Back then OK inside that window would clear the
+// stop out from under the old run, which would wake up believing it was still
+// current and walk the user through the tail of a fix they had abandoned -
+// including the automatic rescan at the end of it. The generation only ever
+// moves forward, so an old run can never mistake itself for the new one.
+static bool fix_current(I2CWorker* worker, uint32_t gen) {
+    return !worker->fix_stop && worker->fix_gen == gen;
+}
+
+static void fix_set(I2CWorker* worker, uint32_t gen, I2CFixStage stage) {
     // Silent once the screen has walked away. Several steps here cannot be
     // interrupted mid-measurement, so a stop can arrive while one is still
     // finishing; announcing the next stage afterwards would drag the user back
     // into a screen they just left, and the last of those stages would kick off
     // a rescan nobody asked for.
-    if(worker->fix_stop) return;
+    if(!fix_current(worker, gen)) return;
     worker->fix_stage = (uint8_t)stage;
     i2c_worker_notify(worker, I2CWorkerEventFixUpdate);
 }
@@ -379,9 +393,9 @@ static bool fix_module_powered(void) {
 }
 
 // Waits for the module's power to go the way asked. Returns false if the view
-// went away while waiting.
-static bool fix_wait_power(I2CWorker* worker, bool want_powered) {
-    while(!worker->fix_stop) {
+// went away, or was replaced by a newer run, while waiting.
+static bool fix_wait_power(I2CWorker* worker, uint32_t gen, bool want_powered) {
+    while(fix_current(worker, gen)) {
         if(fix_module_powered() == want_powered) return true;
         furi_delay_ms(50);
     }
@@ -394,13 +408,14 @@ static bool fix_wait_power(I2CWorker* worker, bool want_powered) {
 // cannot be cut from software, the person is asked, and the app waits until the
 // pull-ups really do disappear.
 static void i2c_worker_do_fix(I2CWorker* worker) {
+    const uint32_t gen = worker->fix_gen;
     bool want_high = worker->fix_want_high;
 
-    fix_set(worker, I2CFixStrapping);
+    fix_set(worker, gen, I2CFixStrapping);
     fix_strap_apply(want_high);
     if(!fix_strap_took(want_high)) {
         fix_strap_release();
-        fix_set(worker, I2CFixPadHeld); // terminal: the screen offers the report
+        fix_set(worker, gen, I2CFixPadHeld); // terminal: the screen offers the report
         return;
     }
 
@@ -413,7 +428,7 @@ static void i2c_worker_do_fix(I2CWorker* worker) {
     bool fell = false;
     if(powered_before) {
         furi_hal_power_disable_external_3_3v();
-        for(uint32_t waited = 0; waited < RAIL_TRY_MS && !worker->fix_stop; waited += 20) {
+        for(uint32_t waited = 0; waited < RAIL_TRY_MS && fix_current(worker, gen); waited += 20) {
             if(!fix_module_powered()) {
                 fell = true;
                 break;
@@ -425,14 +440,14 @@ static void i2c_worker_do_fix(I2CWorker* worker) {
 
     if(!fell) {
         if(powered_before) {
-            fix_set(worker, I2CFixWantPowerOff);
-            if(!fix_wait_power(worker, false)) {
+            fix_set(worker, gen, I2CFixWantPowerOff);
+            if(!fix_wait_power(worker, gen, false)) {
                 fix_strap_release();
                 return;
             }
         }
-        fix_set(worker, I2CFixWantPowerOn);
-        if(!fix_wait_power(worker, true)) {
+        fix_set(worker, gen, I2CFixWantPowerOn);
+        if(!fix_wait_power(worker, gen, true)) {
             fix_strap_release();
             return;
         }
@@ -443,12 +458,12 @@ static void i2c_worker_do_fix(I2CWorker* worker) {
     // pin is sampled at reset and kept. Let go before asking for the wire back,
     // or the pull would fight the bus.
     fix_strap_release();
-    fix_set(worker, I2CFixWantWire);
-    while(!worker->fix_stop) {
+    fix_set(worker, gen, I2CFixWantWire);
+    while(fix_current(worker, gen)) {
         I2CBusCheck bus;
         i2c_worker_check_bus(&bus);
         if(bus.health == I2CBusOk) {
-            fix_set(worker, I2CFixDone);
+            fix_set(worker, gen, I2CFixDone);
             return;
         }
         furi_delay_ms(100);
@@ -571,6 +586,10 @@ I2CPadLevel i2c_worker_get_pad(I2CWorker* worker) {
 void i2c_worker_fix_start(I2CWorker* worker, bool want_high) {
     worker->watch_stop = true; // both of those own pin 15, and the strap needs it
     worker->pad_stop = true;
+    // Bump the generation before clearing the stop, so a run still unwinding
+    // from the last stop is already out of date by the time the stop it was
+    // watching goes away.
+    worker->fix_gen++;
     worker->fix_stop = false;
     worker->fix_want_high = want_high;
     worker->fix_stage = I2CFixStrapping;
