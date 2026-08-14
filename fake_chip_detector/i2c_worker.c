@@ -571,6 +571,10 @@ void i2c_worker_watch_stop(I2CWorker* worker) {
 
 void i2c_worker_pad_watch_start(I2CWorker* worker) {
     worker->pad_stop = false;
+    // Start from nothing rather than from last time's answer. The wire has very
+    // likely been moved to a different pad since, and showing the old level
+    // while the new one settles is showing a measurement of the wrong pin.
+    worker->pad_level = I2CPadUnknown;
     worker->watch_stop = true; // the bus watcher and the pad meter share pin 15
     furi_thread_flags_set(furi_thread_get_id(worker->thread), WORKER_FLAG_PAD);
 }

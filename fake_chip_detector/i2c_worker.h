@@ -48,6 +48,11 @@ typedef enum {
 // Input only: safe to point at a pin whose function nobody knows yet, which is
 // the whole premise of handing this to someone at a parcel counter.
 typedef enum {
+    // Nothing has been measured yet. First, so that a zeroed struct or a meter
+    // that has only just started cannot present itself as a reading. FLOATING
+    // is a result -- and the one that offers the fix on every mode family -- so
+    // it must never double as "no answer yet".
+    I2CPadUnknown,
     I2CPadFloating, // nothing holds it either way
     I2CPadHigh, // driven high, or tied to a rail
     I2CPadLow, // driven low, or tied to ground

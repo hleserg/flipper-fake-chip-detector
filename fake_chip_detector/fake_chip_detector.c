@@ -1046,6 +1046,7 @@ static bool silent_saved_recently(const SilentViewModel* m) {
 
 // Is this level, on this kind of pad, a reason the part cannot answer?
 static bool silent_pad_explains(const PadFamily* fam, uint8_t level) {
+    if(level == I2CPadUnknown) return false; // nothing measured yet, nothing to conclude
     if(!fam->explains_high && !fam->explains_low) return false; // the address row
     // A mode pin left floating is not a grey area: BST-BNO055-DS000 says
     // outright that the protocol select pins may not be left floating, and
@@ -1154,7 +1155,13 @@ static void silent_draw_callback(Canvas* canvas, void* model) {
     const PadFamily* fam = &pad_families[m->selected];
     bool explained = silent_pad_explains(fam, m->level);
 
-    const char* title = "Pad reads FLOATING";
+    // The meter needs four agreeing reads before it will say anything, and
+    // until then it says exactly that. Defaulting the headline to FLOATING
+    // would have announced a level nothing had measured -- and FLOATING is the
+    // one level that offers the fix on every mode family, so it would have
+    // offered to act on it too.
+    const char* title = "Reading the pad...";
+    if(m->level == I2CPadFloating) title = "Pad reads FLOATING";
     if(m->level == I2CPadHigh) title = "Pad reads HIGH";
     if(m->level == I2CPadLow) title = "Pad reads LOW";
     canvas_draw_str_aligned(canvas, 2, 10, AlignLeft, AlignBottom, title);
@@ -1185,6 +1192,10 @@ static void silent_draw_callback(Canvas* canvas, void* model) {
     const char* foot;
     if(silent_saved_recently(m)) {
         foot = "Saved to the SD card.";
+    } else if(m->level == I2CPadUnknown) {
+        // Falling through to the high/low line here would have printed what a
+        // LOW reading means, on a pad nothing had read yet.
+        foot = "Measuring...";
     } else if(m->level == I2CPadFloating) {
         // Alternating, because the likeliest cause is not the pad at all: the
         // wire got moved at the Flipper end instead of the sensor end.
@@ -1206,7 +1217,7 @@ static void silent_enter_callback(void* context) {
             m->stage = I2CFixIdle;
             m->needs_fifth_wire = false;
             m->saved_frame = 0;
-            m->level = i2c_worker_get_pad(app->worker);
+            m->level = I2CPadUnknown; // the meter fills this in, ~200ms from now
         },
         true);
     i2c_worker_pad_watch_start(app->worker);
@@ -1231,7 +1242,7 @@ static bool silent_input_callback(InputEvent* event, void* context) {
                 // Saving is allowed from every one of these screens on purpose:
                 // "the board ties this pad low" is exactly the sentence someone
                 // needs in writing at a parcel counter.
-                diag.pad_measured = true;
+                diag.pad_measured = m->level != I2CPadUnknown;
                 diag.pad_level = m->level;
                 diag.pad_labels = pad_families[m->selected].labels;
                 diag.pad_held = m->stage == I2CFixPadHeld;
