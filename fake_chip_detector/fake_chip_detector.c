@@ -2288,6 +2288,13 @@ static void onewire_draw_callback(Canvas* canvas, void* model) {
             canvas_draw_str(canvas, 2, 34, "Data to pin 17, plus 3V3,");
             canvas_draw_str(canvas, 2, 44, "GND and a 4.7k pull-up.");
         }
+        // Saving matters most here, not least. The person holding a part that
+        // said nothing at all is the one being asked to accept or refuse a
+        // parcel with no evidence either way, and the report has something to
+        // give them: whether the line was held low, which is usually their own
+        // wiring, or whether it was idle and simply nobody answered. There is
+        // no OK action on this screen, so the bar carries only the save hint.
+        draw_action_bar(canvas, "", true);
         return;
     }
 
@@ -2366,11 +2373,11 @@ static bool onewire_input_callback(InputEvent* event, void* context) {
                 // Checked before the save key so that promise stays literal.
                 m->explain = false;
                 consumed = true;
-            } else if(
-                event->key == InputKeyRight && !m->busy && m->res.count &&
-                event->type == InputTypeShort) {
-                // The write itself happens after this block: an SD stall must
-                // never happen with the view-model mutex held.
+            } else if(event->key == InputKeyRight && !m->busy && event->type == InputTypeShort) {
+                // Deliberately not gated on a device having been found: an
+                // empty bus is a result too, and it is the one its owner most
+                // needs written down. Gated on !busy so a half-finished scan
+                // can never be filed as a finished one.
                 do_save = true;
                 consumed = true;
             } else if(event->key == InputKeyUp && m->selected > 0) {
