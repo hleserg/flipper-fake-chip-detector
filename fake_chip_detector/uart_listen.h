@@ -40,10 +40,17 @@ typedef enum {
 // Why the sweep and not one guess: the rate is not knowable in advance, and a
 // wrong one turns real traffic into framing errors rather than silence. The
 // winner is the rate that produced bytes *without* them.
+//
+// abort may be NULL. When it is not, the sweep gives up promptly once it turns
+// true, keeping whatever it had heard by then. This exists because the caller
+// is a worker thread that gets joined on the way out of the app: a wait that
+// ignored the flag would show up to the user as the app taking two seconds to
+// close.
 UartListenOutcome uart_listen_sweep(
     const uint32_t* bauds,
     size_t baud_count,
     uint32_t window_ms,
+    const volatile bool* abort,
     UartListenResult* out);
 
 // Loopback self-test: with a jumper from pin 15 to pin 16 this proves the whole

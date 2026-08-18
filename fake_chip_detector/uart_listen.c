@@ -116,9 +116,23 @@ typedef struct {
     const uint32_t* bauds;
     size_t baud_count;
     uint32_t window_ms;
+    const volatile bool* abort;
     UartListenResult best;
     bool found;
 } ListenJob;
+
+// The window, waited in slices so that leaving the app does not have to sit
+// through the rest of one. Returns false if the flag went up: the caller still
+// reads out what arrived before that, because bytes heard are bytes heard.
+static bool listen_wait(uint32_t ms, const volatile bool* abort) {
+    const uint32_t slice = 25;
+    for(uint32_t waited = 0; waited < ms; waited += slice) {
+        if(abort && *abort) return false;
+        uint32_t left = ms - waited;
+        furi_delay_ms(left < slice ? left : slice);
+    }
+    return !(abort && *abort);
+}
 
 // Clean bytes beat noisy bytes, and more clean bytes beat fewer. A rate that
 // produced only framing errors is still kept if nothing better turns up: it
@@ -150,7 +164,7 @@ static bool uart_listen_body(FuriHalSerialHandle* handle, UartRxContext* rx, voi
         rx->frame_errors = 0;
         furi_hal_serial_async_rx_start(handle, uart_rx_callback, rx, true);
 
-        furi_delay_ms(job->window_ms);
+        bool completed = listen_wait(job->window_ms, job->abort);
 
         uint8_t buffer[UART_RX_BUFFER];
         size_t got = furi_stream_buffer_receive(rx->rx, buffer, sizeof(buffer), 0);
@@ -163,11 +177,13 @@ static bool uart_listen_body(FuriHalSerialHandle* handle, UartRxContext* rx, voi
         };
         memcpy(result.sample, buffer, result.sample_len);
 
-        if(got == 0 && result.frame_errors == 0) continue;
-        if(!job->found || listen_is_better(&result, &job->best)) {
-            job->best = result;
-            job->found = true;
+        if(got || result.frame_errors) {
+            if(!job->found || listen_is_better(&result, &job->best)) {
+                job->best = result;
+                job->found = true;
+            }
         }
+        if(!completed) break; // asked to stop; what was heard is still kept
     }
     return job->found;
 }
@@ -176,12 +192,18 @@ UartListenOutcome uart_listen_sweep(
     const uint32_t* bauds,
     size_t baud_count,
     uint32_t window_ms,
+    const volatile bool* abort,
     UartListenResult* out) {
     furi_check(out);
     memset(out, 0, sizeof(*out));
     if(!bauds || !baud_count) return UartListenUnavailable;
 
-    ListenJob job = {.bauds = bauds, .baud_count = baud_count, .window_ms = window_ms};
+    ListenJob job = {
+        .bauds = bauds,
+        .baud_count = baud_count,
+        .window_ms = window_ms,
+        .abort = abort,
+    };
     bool ran = false;
     bool heard = uart_with_lpuart(bauds[0], uart_listen_body, &job, &ran);
     if(!ran) return UartListenUnavailable;
@@ -198,8 +220,17 @@ UartListenOutcome uart_listen_sweep(
 // exercise framing rather than a run of identical edges.
 static const uint8_t uart_selftest_pattern[] = {0x55, 0xAA, 0x0F, 0xF0, 0x3C, 0xC3};
 
+// The buffer travels with its size instead of as a bare pointer. The size used
+// to live here as a literal 32 that had to keep agreeing with a declaration in
+// another function, and that is the kind of agreement that stops being true
+// quietly.
+typedef struct {
+    char* text;
+    size_t size;
+} SelftestDetail;
+
 static bool uart_selftest_body(FuriHalSerialHandle* handle, UartRxContext* rx, void* context) {
-    char* detail = context;
+    SelftestDetail* detail = context;
 
     furi_hal_serial_tx(handle, uart_selftest_pattern, sizeof(uart_selftest_pattern));
     furi_hal_serial_tx_wait_complete(handle);
@@ -211,22 +242,32 @@ static bool uart_selftest_body(FuriHalSerialHandle* handle, UartRxContext* rx, v
     bool ok = len == sizeof(uart_selftest_pattern) &&
               memcmp(got, uart_selftest_pattern, len) == 0 && rx->frame_errors == 0;
 
-    if(detail) {
+    if(detail && detail->text && detail->size) {
         if(ok) {
-            snprintf(detail, 32, "%u bytes back, clean", (unsigned)len);
+            snprintf(detail->text, detail->size, "%u bytes back, clean", (unsigned)len);
         } else if(len == 0) {
-            snprintf(detail, 32, "nothing came back");
+            snprintf(detail->text, detail->size, "nothing came back");
         } else {
-            snprintf(detail, 32, "%u bytes, %lu errors", (unsigned)len, rx->frame_errors);
+            snprintf(
+                detail->text,
+                detail->size,
+                "%u bytes, %lu errors",
+                (unsigned)len,
+                rx->frame_errors);
         }
     }
     return ok;
 }
 
 bool uart_selftest_loopback(uint32_t baud, char* detail, size_t detail_size) {
+    // Written first and only overwritten if the body actually ran. Never
+    // reaching the wire has to read differently from reaching it and hearing
+    // nothing -- on this screen most of all, because it is the one place a
+    // user is told the transport itself is sound.
     if(detail && detail_size) snprintf(detail, detail_size, "LPUART unavailable");
-    char line[32] = {0};
-    bool ok = uart_with_lpuart(baud, uart_selftest_body, line, NULL);
+    char line[40] = {0};
+    SelftestDetail sink = {.text = line, .size = sizeof(line)};
+    bool ok = uart_with_lpuart(baud, uart_selftest_body, &sink, NULL);
     if(detail && detail_size && line[0]) snprintf(detail, detail_size, "%s", line);
     return ok;
 }
