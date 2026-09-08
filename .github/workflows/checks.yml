@@ -43,6 +43,22 @@ jobs:
           python-version: "3.12"
       - run: python tools/gen_supported_chips.py --check
 
+  identify:
+    name: chip_db_identify behaves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No ufbt and no toolchain: chip_db.c reaches the hardware through three
+      # I2C functions and furi_delay_ms, so the host compiler builds it against
+      # a stub of each in a couple of seconds. Everything else in the app draws
+      # or threads and could not run here.
+      - run: |
+          cc -Wall -Wextra -Werror -std=gnu11 \
+             -I fake_chip_detector -I tools/chip_db_test \
+             fake_chip_detector/chip_db.c tools/chip_db_test/test_chip_db.c \
+             -o /tmp/chip_db_test
+          /tmp/chip_db_test
+
   lint:
     name: clang-format
     runs-on: ubuntu-latest

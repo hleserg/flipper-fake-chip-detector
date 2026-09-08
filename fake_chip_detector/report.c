@@ -387,6 +387,31 @@ void report_build(
             furi_string_cat_str(
                 out, "The chip acknowledged its address but returned no data.\n\n");
             break;
+        case VerdictAmbiguous: {
+            // The report is the one place with room to name them, and naming
+            // them is the difference between a verdict somebody can act on and
+            // a shrug. What it must not do is imply the tool narrowed it down
+            // further than it did, so the list is complete or it says so.
+            const ChipEntry* cands[8] = {0};
+            const size_t total = chip_db_no_id_at(dev->addr, cands, COUNT_OF(cands));
+            if(total == dev->ident.candidates && total > 0) {
+                furi_string_cat_str(
+                    out,
+                    "More than one part lives at this address and none of them carries a "
+                    "factory ID, so nothing read here can tell them apart. It is one of: ");
+                for(size_t c = 0; c < total && c < COUNT_OF(cands); c++) {
+                    furi_string_cat_printf(out, "%s%s", c ? ", " : "", cands[c]->name);
+                }
+                furi_string_cat_str(out, ".\n\n");
+            } else {
+                furi_string_cat_printf(
+                    out,
+                    "%u known parts answer the ID registers read here equally well, so this "
+                    "tool will not pick one of them.\n\n",
+                    (unsigned)dev->ident.candidates);
+            }
+            break;
+        }
         default:
             furi_string_cat_str(out, "The ID it reported matches no chip known to this tool.\n\n");
             break;

@@ -329,6 +329,17 @@ static int32_t chip_try_candidate(const ChipEntry* chip, uint8_t addr7, IdReadRe
     return all_reads_ok ? matches : -1;
 }
 
+size_t chip_db_no_id_at(uint8_t addr7, const ChipEntry** out, size_t max) {
+    size_t n = 0;
+    for(size_t i = 0; i < CHIP_DB_COUNT; i++) {
+        const ChipEntry* chip = &chip_db[i];
+        if(chip->checks != NULL || !chip_has_addr(chip, addr7)) continue;
+        if(out && n < max) out[n] = chip;
+        n++;
+    }
+    return n;
+}
+
 void chip_db_identify(uint8_t addr7, ChipIdentification* out) {
     // Zero here means VerdictNotChecked, not VerdictGenuine. Every return below
     // sets a verdict of its own, so this only ever shows if someone later adds
@@ -336,58 +347,83 @@ void chip_db_identify(uint8_t addr7, ChipIdentification* out) {
     // calling an unexamined part real.
     memset(out, 0, sizeof(*out));
 
-    const ChipEntry* no_id_candidate = NULL;
+    const ChipEntry* no_id_first = NULL;
+    const size_t no_id_count = chip_db_no_id_at(addr7, &no_id_first, 1);
+
     const ChipEntry* best_chip = NULL;
     IdReadResult best_reads[CHIP_MAX_CHECKS] = {0};
     uint8_t best_read_count = 0;
-    int32_t best_matches = -1; // -1 = every read of every candidate failed
+    // -2, not -1, because -1 is a real score: chip_try_candidate returns it
+    // when a read failed. Starting at -1 meant the first such candidate never
+    // beat the initial value, so best_chip stayed NULL and the verdict below
+    // shipped with read_count == 0 -- the detail screen of a part that answers
+    // its address and nothing else was blank, which is the one case where the
+    // registers it refused to answer are the whole story.
+    int32_t best_matches = -2;
+    bool best_full = false;
+    bool best_tied = false;
+    uint8_t best_tie_count = 1;
+
+    bool any_read_attempted = false;
     bool any_read_ok = false;
 
     for(size_t i = 0; i < CHIP_DB_COUNT; i++) {
         const ChipEntry* chip = &chip_db[i];
-        if(!chip_has_addr(chip, addr7)) continue;
+        if(chip->checks == NULL || !chip_has_addr(chip, addr7)) continue;
 
-        if(chip->checks == NULL) {
-            if(!no_id_candidate) no_id_candidate = chip;
-            continue;
-        }
-
+        const uint8_t count = chip->check_count < CHIP_MAX_CHECKS ? chip->check_count :
+                                                                    CHIP_MAX_CHECKS;
         IdReadResult reads[CHIP_MAX_CHECKS];
-        int32_t matches = chip_try_candidate(chip, addr7, reads);
-        for(uint8_t r = 0; r < chip->check_count && r < CHIP_MAX_CHECKS; r++) {
+        const int32_t matches = chip_try_candidate(chip, addr7, reads);
+        for(uint8_t r = 0; r < count; r++) {
+            any_read_attempted = true;
             if(reads[r].read_ok) any_read_ok = true;
         }
 
-        if(matches == (int32_t)chip->check_count) {
-            out->chip = chip;
-            out->verdict = VerdictGenuine;
-            memcpy(out->reads, reads, sizeof(reads));
-            out->read_count = chip->check_count;
-            return;
+        const bool full = (count > 0 && matches == (int32_t)count);
+
+        // Two full matches at one address are decided by how many registers
+        // each one had to get right, never by which row was typed first. At
+        // 0x0D the AK09911 answers two ID registers taken from its datasheet,
+        // while the QMC5883L candidate is a single read of a register that is
+        // reserved on both parts and comes back 0xFF either way. Ordering the
+        // table differently must not change what a board is called, and adding
+        // a row must not quietly rename one.
+        bool better;
+        if(full != best_full) {
+            better = full; // any full match beats any partial one
+        } else if(full) {
+            better = count > best_read_count;
+        } else {
+            better = matches > best_matches;
         }
-        if(matches > best_matches) {
+
+        // ponytail: equal-length full matches are called ambiguous rather than
+        // scored further. Weighing a wide unique value against a narrow common
+        // one would separate them, and wants a per-check weight in the table
+        // to do honestly. No address in the database needs it yet.
+        if(full && best_full && count == best_read_count && !better) {
+            best_tied = true;
+            best_tie_count++;
+            continue;
+        }
+
+        if(better) {
+            best_full = full;
             best_matches = matches;
             best_chip = chip;
-            memcpy(best_reads, reads, sizeof(reads));
-            best_read_count = chip->check_count;
+            best_read_count = count;
+            best_tied = false;
+            best_tie_count = 1;
+            memcpy(best_reads, reads, sizeof(best_reads));
         }
     }
 
-    // The device ACKed its address but no register read ever succeeded.
-    // Report that honestly instead of guessing at a no-ID chip.
-    if(!any_read_ok && (best_chip != NULL || no_id_candidate == NULL)) {
-        out->chip = best_chip;
-        out->verdict = VerdictNoAnswer;
-        memcpy(out->reads, best_reads, sizeof(best_reads));
-        out->read_count = best_read_count;
-        return;
-    }
-
-    if(best_chip == NULL && no_id_candidate == NULL) {
+    if(best_chip == NULL && no_id_count == 0) {
         // Address is unknown: probe the common WHO_AM_I locations so the user
         // has raw bytes to search for.
         static const uint8_t probe_regs[] = {0x00, 0x0F, 0x75, 0xD0};
-        out->verdict = VerdictUnknown;
+        bool probe_ok = false;
         for(size_t i = 0; i < sizeof(probe_regs) && out->read_count < CHIP_MAX_CHECKS; i++) {
             IdReadResult* r = &out->reads[out->read_count];
             uint8_t byte = 0;
@@ -395,37 +431,68 @@ void chip_db_identify(uint8_t addr7, ChipIdentification* out) {
             r->has_expected = false;
             r->read_ok = i2c_worker_read_reg(addr7, probe_regs[i], &byte, I2C_REG_TIMEOUT_MS);
             r->actual = byte;
+            if(r->read_ok) probe_ok = true;
             out->read_count++;
         }
-        return;
-    }
-
-    if(no_id_candidate && best_matches <= 0) {
-        // Reads worked but matched nothing, and a known chip without an ID
-        // register lives here (DS3231 at 0x68, SSD1306 at 0x3C). Presence is
-        // all we can honestly claim — never GENUINE without an ID to check.
-        out->chip = no_id_candidate;
-        out->verdict = VerdictDetectedNoId;
-        memcpy(out->reads, best_reads, sizeof(best_reads));
-        out->read_count = best_read_count;
+        // "Not in the database" and "would not talk" are different faults with
+        // different fixes, and only the first is about the database. Sending
+        // someone to look up bytes that were never read is the worse of the two
+        // mistakes, so an address that answered nothing says so.
+        out->verdict = probe_ok ? VerdictUnknown : VerdictNoAnswer;
         return;
     }
 
     memcpy(out->reads, best_reads, sizeof(best_reads));
     out->read_count = best_read_count;
 
+    if(any_read_attempted && !any_read_ok) {
+        // The device ACKed its address and then answered no register at all.
+        // It is deliberately left unnamed: a part that will not read has
+        // identified itself as nothing, and the failed registers below are the
+        // only evidence there is.
+        out->chip = NULL;
+        out->verdict = VerdictNoAnswer;
+        return;
+    }
+
+    if(best_full) {
+        // A tie survived to here, so two parts each answered the same number of
+        // ID registers correctly and both are telling the truth about
+        // themselves. Naming either would be a coin toss printed as a reading.
+        out->chip = best_tied ? NULL : best_chip;
+        out->verdict = best_tied ? VerdictAmbiguous : VerdictGenuine;
+        out->candidates = best_tied ? best_tie_count : 0;
+        return;
+    }
+
     if(best_matches > 0) {
         // Some of a known chip's IDs match and the rest do not. A genuine part
         // has all of them, so this is real evidence of a counterfeit.
         out->chip = best_chip;
         out->verdict = VerdictWrongChip;
-    } else {
-        // Nothing matched at all. That is far more often a chip missing from
-        // the database than a fake, so do not accuse it — show the bytes and
-        // let the user look them up.
-        out->chip = NULL;
-        out->verdict = VerdictNoMatch;
+        return;
     }
+
+    // Reads worked but matched nothing, and a known chip without an ID register
+    // lives here. Presence is all we can honestly claim -- never GENUINE
+    // without an ID to check, and never a name when more than one part fits.
+    if(no_id_count == 1) {
+        out->chip = no_id_first;
+        out->verdict = VerdictDetectedNoId;
+        return;
+    }
+    if(no_id_count > 1) {
+        out->chip = NULL;
+        out->verdict = VerdictAmbiguous;
+        out->candidates = no_id_count > UINT8_MAX ? UINT8_MAX : (uint8_t)no_id_count;
+        return;
+    }
+
+    // Nothing matched at all. That is far more often a chip missing from the
+    // database than a fake, so do not accuse it -- show the bytes and let the
+    // user look them up.
+    out->chip = NULL;
+    out->verdict = VerdictNoMatch;
 }
 
 const char* chip_verdict_str(ChipVerdict verdict) {
@@ -444,6 +511,8 @@ const char* chip_verdict_str(ChipVerdict verdict) {
         return "UNKNOWN";
     case VerdictNoAnswer:
         return "NO ANSWER";
+    case VerdictAmbiguous:
+        return "SEVERAL POSSIBLE";
     default:
         return "?";
     }
@@ -465,6 +534,8 @@ const char* chip_verdict_headline(ChipVerdict verdict) {
         return "UNKNOWN";
     case VerdictNoAnswer:
         return "NO ANSWER";
+    case VerdictAmbiguous:
+        return "AMBIGUOUS";
     default:
         return "?";
     }
@@ -499,6 +570,10 @@ void chip_verdict_explain(ChipVerdict verdict, const char** line1, const char** 
         *line1 = "It answers, reads fail.";
         *line2 = "Check pull-ups and wires.";
         break;
+    case VerdictAmbiguous:
+        *line1 = "More than one part fits.";
+        *line2 = "Nothing tells them apart.";
+        break;
     default:
         *line1 = "Address not in database.";
         *line2 = "Raw bytes are in details.";
@@ -506,8 +581,14 @@ void chip_verdict_explain(ChipVerdict verdict, const char** line1, const char** 
     }
 }
 
+// Ambiguous belongs here for the same reason DetectedNoId does: the address is
+// populated and not one byte read from it is evidence of anything wrong. It is
+// a weaker answer than either of the others, never a worse one, and routing it
+// down the "NOT YOURS" path would turn "this tool cannot tell two real parts
+// apart" into an accusation aimed at whoever sold the board.
 bool chip_verdict_is_good(ChipVerdict verdict) {
-    return verdict == VerdictGenuine || verdict == VerdictDetectedNoId;
+    return verdict == VerdictGenuine || verdict == VerdictDetectedNoId ||
+           verdict == VerdictAmbiguous;
 }
 
 const char* chip_verdict_short_str(ChipVerdict verdict) {
@@ -526,6 +607,8 @@ const char* chip_verdict_short_str(ChipVerdict verdict) {
         return "unknown";
     case VerdictNoAnswer:
         return "silent";
+    case VerdictAmbiguous:
+        return "ambiguous";
     default:
         return "?";
     }

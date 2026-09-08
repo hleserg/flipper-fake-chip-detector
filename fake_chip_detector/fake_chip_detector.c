@@ -701,7 +701,13 @@ static void scan_draw_callback(Canvas* canvas, void* model) {
     if(m->found_count == 1) {
         const I2CFoundDevice* dev = &m->found[0];
         ChipVerdict v = dev->ident.verdict;
-        const char* name = dev->ident.chip ? dev->ident.chip->name : "Unknown chip";
+        // No chip means one of two different things, and they read nothing
+        // alike. Nothing here answered to anything known, or several known
+        // parts answered equally well -- the second is a populated address
+        // this tool declines to guess at, not an unrecognised one.
+        const char* name = dev->ident.chip       ? dev->ident.chip->name :
+                           v == VerdictAmbiguous ? "Several parts" :
+                                                   "Unknown chip";
         const char* kind = dev->ident.chip ? dev->ident.chip->kind : NULL;
 
         if(m->answer == AnswerAsking) {
@@ -753,7 +759,22 @@ static void scan_draw_callback(Canvas* canvas, void* model) {
             canvas_draw_str(canvas, 36, 20, proven ? "ALL GOOD" : "IT ANSWERS");
             canvas_set_font(canvas, FontSecondary);
             canvas_draw_str(canvas, 36, 30, proven ? "Real deal." : "No ID to check.");
-            canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignBottom, name);
+            if(v == VerdictAmbiguous) {
+                // The count, not the names: at 0x40 there are three of them and
+                // the shortest honest list of the three is wider than the
+                // screen. The detail screen and the report have the room to
+                // name them, and this line says there is something to go and
+                // read there.
+                snprintf(
+                    buf,
+                    sizeof(buf),
+                    "%u parts share 0x%02X",
+                    (unsigned)dev->ident.candidates,
+                    dev->addr);
+                canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignBottom, buf);
+            } else {
+                canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignBottom, name);
+            }
 
             // The ID said what it is; a live test says it works. Offered here
             // and only here, because this is the moment the answer is yes.
@@ -925,6 +946,7 @@ static I2CNotifyKind verdict_notify_kind(ChipVerdict verdict) {
     case VerdictNoAnswer:
         return I2CNotifyBad;
     case VerdictUnknown:
+    case VerdictAmbiguous:
         return I2CNotifyAttention;
     default:
         return I2CNotifyNeutral;
@@ -1622,6 +1644,43 @@ static void wiring_exit_callback(void* context) {
 
 /* ---------------- Detail screen ---------------- */
 
+// Which parts the address could be holding. Only the ones with no ID register
+// can be listed: the other way to land on VerdictAmbiguous is two chips whose
+// ID checks both passed, and those are not recorded anywhere by the time this
+// draws. The count in the identification covers that case, so this returns to
+// it when it has no names to offer.
+//
+// Names are dropped from the end once the line is full rather than skipped over
+// to fit a shorter one further down: a list printed in an order that matches
+// nothing is worse than a short list that says how much it left out.
+static uint8_t detail_draw_candidates(Canvas* canvas, const I2CFoundDevice* dev, uint8_t y) {
+    const ChipEntry* cands[CHIP_MAX_ADDRS] = {0};
+    const size_t total = chip_db_no_id_at(dev->addr, cands, COUNT_OF(cands));
+    char buf[48];
+
+    if(total != dev->ident.candidates || total == 0) {
+        snprintf(buf, sizeof(buf), "%u parts fit, none named.", (unsigned)dev->ident.candidates);
+        canvas_draw_str(canvas, 2, y, buf);
+        return 9;
+    }
+
+    const uint16_t budget = 126 - canvas_string_width(canvas, " +9");
+    size_t used = (size_t)snprintf(buf, sizeof(buf), "Fits:");
+    size_t shown = 0;
+    for(size_t i = 0; i < total && i < COUNT_OF(cands); i++) {
+        snprintf(buf + used, sizeof(buf) - used, " %s", cands[i]->name);
+        if(canvas_string_width(canvas, buf) > budget) {
+            buf[used] = '\0';
+            break;
+        }
+        used = strlen(buf);
+        shown++;
+    }
+    if(shown < total) snprintf(buf + used, sizeof(buf) - used, " +%u", (unsigned)(total - shown));
+    canvas_draw_str(canvas, 2, y, buf);
+    return 9;
+}
+
 static void detail_draw_callback(Canvas* canvas, void* model) {
     DetailViewModel* m = model;
     const I2CFoundDevice* dev = &m->device;
@@ -1634,7 +1693,9 @@ static void detail_draw_callback(Canvas* canvas, void* model) {
         sizeof(buf),
         "0x%02X  %s",
         dev->addr,
-        dev->ident.chip ? dev->ident.chip->name : "UNKNOWN");
+        dev->ident.chip                        ? dev->ident.chip->name :
+        dev->ident.verdict == VerdictAmbiguous ? "AMBIGUOUS" :
+                                                 "UNKNOWN");
     canvas_draw_str(canvas, 2, 10, buf);
 
     canvas_set_font(canvas, FontSecondary);
@@ -1670,6 +1731,9 @@ static void detail_draw_callback(Canvas* canvas, void* model) {
         canvas_draw_str(canvas, 2, 20, "This chip has no ID reg:");
         canvas_draw_str(canvas, 2, 29, "only presence is proven.");
         y = 38;
+    }
+    if(dev->ident.verdict == VerdictAmbiguous && y <= 45) {
+        y += detail_draw_candidates(canvas, dev, y);
     }
     if(any_read_failed && y <= 45) {
         canvas_draw_str(canvas, 2, y, "Answers, but reads fail.");

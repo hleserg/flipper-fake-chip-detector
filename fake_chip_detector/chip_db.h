@@ -56,6 +56,13 @@ typedef enum {
     VerdictDetectedNoId, // address belongs to a chip without an ID register
     VerdictUnknown, // address not in the database
     VerdictNoAnswer, // device stopped answering register reads
+    // Several parts fit what was read and nothing on the bus separates them:
+    // two chips with no ID register sharing an address, or two whose ID checks
+    // both passed with equal weight. New values go at the end -- every switch
+    // over this enum has a default:, so the compiler will not point at the ones
+    // that need a case, and a value inserted in the middle would silently
+    // renumber the rest.
+    VerdictAmbiguous,
 } ChipVerdict;
 
 typedef struct {
@@ -74,6 +81,12 @@ typedef struct {
     ChipVerdict verdict;
     IdReadResult reads[CHIP_MAX_CHECKS];
     uint8_t read_count;
+    // How many parts fit, for VerdictAmbiguous and nothing else. Counted where
+    // the decision is made rather than recovered afterwards, because the two
+    // ways a result can be ambiguous -- several parts with no ID register, or
+    // several whose ID checks passed equally -- would need counting differently
+    // and the verdict does not record which one happened.
+    uint8_t candidates;
 } ChipIdentification;
 
 // Probes the device at addr7 and fills out the identification result.
@@ -137,6 +150,15 @@ bool chip_mode_pin_matches(const ChipModePin* pin, uint8_t kind, uint8_t alt, bo
 // Iteration, for the docs generator and the silent-bus screens.
 size_t chip_mode_pin_count(void);
 const ChipModePin* chip_mode_pin_get(size_t index);
+
+// The parts at this address that carry no ID register, newest-registered last.
+// Returns how many there are in total, which can exceed `max`; `out` may be
+// NULL to ask for the count alone.
+//
+// Two of them at one address is not an exotic case -- 0x68 has the DS3231 and
+// the DS1307, 0x40 has three -- and there is nothing on the bus that tells them
+// apart. The screens use this to say how many rather than to pick one.
+size_t chip_db_no_id_at(uint8_t addr7, const ChipEntry** out, size_t max);
 
 // Number of chips in the database, for the About screen.
 size_t chip_db_count(void);
