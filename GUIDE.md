@@ -160,6 +160,7 @@ one that says the board holds the pin. That report is the thing to show a seller
 | **UNIDENTIFIED** | Something is there, but it matches nothing the app knows. Usually a chip missing from the app's list rather than a fake — the raw numbers are shown so you can look them up. |
 | **IT ANSWERS** / **DETECTED (no ID reg)** | The chip is there, but this kind of chip has no identifying number at all. Presence is all anybody can prove. This is where a live test (step 7) earns its keep. |
 | **NO ANSWER** | Something acknowledged its address and then would not talk. |
+| **SEVERAL POSSIBLE** | More than one chip fits what was read, and nothing on the wire tells them apart. The app names them rather than picking one. Not a fake — a limit of what two wires can prove. |
 
 The app will not tell you a part is real when all it knows is that something answered. That
 restraint is the reason to trust it when it does say GENUINE.

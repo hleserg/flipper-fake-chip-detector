@@ -29,6 +29,9 @@ tried when a Flipper and the right parts are next in the same room.
 | Strap-and-blink power-cycle ladder, and the pad meter | #20 | The rail blink, and the automatic rescan behind it, unwatched. The pad meter has never been checked against a known level (pin 8 must read LOW, pin 9 HIGH, open air FLOATING). |
 | Live-test verdict wording | #21 | Never seen on a screen. |
 | Chip `kind` renames | #33 | Text only. Widths were measured exactly (see below), not photographed. |
+| AK09911 live test | #40 | **Never run on hardware.** No self-test coil has been fired, no CNTL2 write has been acknowledged, and the sensitivity correction was checked against one bench capture pasted into issue #38 rather than against a part on this desk. |
+| AK09911 and QMC5883P database rows, and the `RST` mode pin | #40 | The QMC5883P was added from its datasheet alone and no part has answered at 0x2C here. The AK09911's addresses and reset polarity come from the short-form datasheet; the register map behind the two ID checks rests on issue #38's citation agreeing with a bench read of `48 05 20 00`. The `RST` pad has never been strapped. |
+| `SEVERAL POSSIBLE` verdict | #40 | Covered by the host test in `tools/chip_db_test/`, which is real coverage of the decision but not of the screen. The summary line, the `Fits:` list on the detail screen and the report paragraph have never been drawn. |
 
 Screen widths in #33 and #34 were measured with
 [`tools/screen_width.py`](tools/screen_width.py), which decodes the real `FontSecondary`

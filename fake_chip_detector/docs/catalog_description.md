@@ -12,7 +12,7 @@ Five seconds, at the pickup counter, before you pay.
 
 ## What it does
 
-- Identifies **80 chips** by their ID registers, each with a plain-language line about what it
+- Identifies **82 chips** by their ID registers, each with a plain-language line about what it
   actually does. Address collisions are resolved by probing every candidate.
 - Produces a **report you can show a seller**: plain statement first, why a factory ID cannot be
   forged second, register values last. Readable on the Flipper and saved to the SD card.
@@ -52,8 +52,8 @@ The GPIO pins are 3.3 V and not 5 V tolerant.
 
 ## This is a beta
 
-Version 0.7, and the number is honest: one part has been driven end to end on real silicon, and
-twelve of the thirteen live tests have never met the chip they were written for. If you run it,
+Version 0.8, and the number is honest: one part has been driven end to end on real silicon, and
+thirteen of the fourteen live tests have never met the chip they were written for. If you run it,
 please say what happened — a chip it did not recognise is a useful report, not a nuisance.
 
 Source, a step-by-step guide with screenshots, and the full chip list:

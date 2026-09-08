@@ -53,8 +53,8 @@ still exported. The assets have not been rebuilt because a rebuild would change 
 > [issue](https://github.com/hleserg/flipper-fake-chip-detector/issues). "It works" is a useful
 > report; so is a photo of it failing.
 
-**This is 0.7, and the number is honest.** One sensor has been driven end to end on real
-silicon. Twelve of the thirteen live tests have never met the chip they were written for. It
+**This is 0.8, and the number is honest.** One sensor has been driven end to end on real
+silicon. Thirteen of the fourteen live tests have never met the chip they were written for. It
 goes to 1.0 when other people's hardware has had a say.
 
 **New to this?** **[GUIDE.md](GUIDE.md)** walks through the whole thing with screenshots at every
@@ -71,7 +71,7 @@ one register — this app does that and shows its work.
 ## What it does
 
 - **Names the part and what it is.** Not just `VL6180X` but `VL6180X — Laser rangefinder`, for
-  all 80 chips in the database. No searching a part number to find out you were sent a distance
+  all 82 chips in the database. No searching a part number to find out you were sent a distance
   sensor instead of the IMU you paid for.
   → **[Full list of supported chips](fake_chip_detector/SUPPORTED_CHIPS.md)**, with the register
   and expected value used for each one.
@@ -184,6 +184,7 @@ Nothing in the source is conditional on the firmware; all three are the same cod
 | `UNIDENTIFIED` | It answers but nothing matched. Usually a chip missing from the database; the raw bytes are shown so you can look them up. |
 | `DETECTED (no ID reg)` | A known chip lives at this address but has no ID register — presence is all that can be proven. |
 | `NO ANSWER` | The device acknowledged its address but no register read succeeded. |
+| `SEVERAL POSSIBLE` | More than one part fits and nothing on the bus separates them — two ID-less chips sharing an address, or two whose ID checks both passed. The candidates are named. |
 
 **What the app can and cannot know.** It reads what the silicon says about itself. It cannot see
 the silkscreen, the packaging or the seller's listing, so it never claims a chip matches its
