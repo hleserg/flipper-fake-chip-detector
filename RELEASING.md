@@ -24,7 +24,10 @@ ufbt format                                     # in fake_chip_detector/, if any
 Bump `fap_version` in `fake_chip_detector/application.fam` — **the catalog rejects a
 resubmission that reuses a version**, and a review comment on the open catalog PR means a new
 version, not an amended commit. Add the matching entry to `fake_chip_detector/docs/changelog.md`,
-which is what the catalog renders. The pack copies carry it as `CHANGELOG.md` in the app
+which is what the catalog renders — **with no backticks in it**. The changelog goes through the
+same markdown checker as the description (`Markdown element 'Backtick' is not allowed`), which
+0.7 happened to satisfy by accident and 0.8 did not. Bold instead. Nothing catches this until
+`tools/bundle.py` runs, which is after the tag is cut unless you check first. The pack copies carry it as `CHANGELOG.md` in the app
 directory instead — that is what `all-the-plugins`' PR template asks for — so copy it across
 under that name when you re-copy the app in step 3.
 
@@ -78,7 +81,7 @@ All four point at the release commit — `git rev-parse v0.8.0`.
 | [flipper-application-catalog](https://github.com/flipperdevices/flipper-application-catalog) | `applications/GPIO/fake_chip_detector/manifest.yml`: new `commit_sha` |
 | [all-the-plugins](https://github.com/xMasterX/all-the-plugins) | re-copy the app into `non_catalog_apps/fake_chip_detector/`; base the branch on **`dev`**, not `main` |
 | [Momentum-Apps](https://github.com/Next-Flip/Momentum-Apps) | re-copy into `fake_chip_detector/`; `.gitsubtree` stays as it is; base on **`dev`** |
-| [awesome-flipperzero](https://github.com/djsime1/awesome-flipperzero) | nothing unless the description changed |
+| [awesome-flipperzero](https://github.com/djsime1/awesome-flipperzero) | its one line carries the chip count, so in practice every release that adds a chip touches it |
 
 **The pack copies are not byte-identical to this repository, and a plain re-copy silently
 reverts the differences.** After copying, re-apply both:
@@ -88,6 +91,22 @@ reverts the differences.** After copying, re-apply both:
 - In `LIVE_TESTS.md`, the two `../test_plugin_template` links become
   `https://github.com/hleserg/flipper-fake-chip-detector/tree/master/test_plugin_template`, and
   the second one reads "in the upstream repository" rather than "in the repository root".
+- **`README.md` in both packs is a different document from this repository's
+  `fake_chip_detector/README.md`.** The one here is a stub pointing one directory up, which is
+  useless in a pack; the packs carry a standalone description instead, and it holds the chip
+  count, the identified-by-ID count and the live-test count. Exclude it from the copy and edit
+  the counts in place. A plain re-copy replaces it with the stub and no build fails.
+
+The copy itself, both packs (Momentum also keeps `.gitsubtree`):
+
+```bash
+rsync -a --delete --exclude dist --exclude docs --exclude .clang-format --exclude .vscode \
+      --exclude screenshots --exclude CHANGELOG.md --exclude LICENSE --exclude README.md \
+      --exclude .gitsubtree fake_chip_detector/ <pack>/fake_chip_detector/
+```
+
+`.vscode/` and `screenshots/` are in this repository and in neither pack. `--delete` does not
+touch anything named in an `--exclude`, which is what keeps `LICENSE` and `.gitsubtree` alive.
 
 ```bash
 grep -rn '](\.\./' non_catalog_apps/fake_chip_detector/    # must print nothing
@@ -106,9 +125,16 @@ Validate the catalog manifest before pushing, from a checkout of the catalog rep
 because the second form is the one CI runs:
 
 ```bash
-python tools/bundle.py --nolint applications/GPIO/fake_chip_detector/manifest.yml bundle.zip
-python tools/bundle.py          applications/GPIO/fake_chip_detector/manifest.yml bundle.zip
+python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
+PATH=<dir holding ufbt>:$PATH .venv/bin/python tools/bundle.py --nolint \
+    applications/GPIO/fake_chip_detector/manifest.yml bundle.zip
+PATH=<dir holding ufbt>:$PATH .venv/bin/python tools/bundle.py \
+    applications/GPIO/fake_chip_detector/manifest.yml bundle.zip
 ```
+
+The requirements are under `tools/`, not at the root, and `bundle.py` shells out to `ufbt` by
+name — without it on `PATH` the failure is `FileNotFoundError: 'ufbt'` several screens into a
+traceback.
 
 ## 4. Screenshots and description, if they changed
 
