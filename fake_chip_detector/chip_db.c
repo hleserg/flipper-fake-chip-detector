@@ -88,7 +88,34 @@ static const IdCheck hmc5883l_checks[] = {
     {0x0B, 0x34, M8, false, false},
     {0x0C, 0x33, M8, false, false},
 };
+// One read of one register, and the register is 0xFF on more than this part.
+// It stays because a QMC5883L has nothing better to offer -- 0x0D is the only
+// thing in its map that is fixed -- but it is the weakest signature in this
+// table, and the AK09911 below shares one of its addresses. Which one wins is
+// settled by chip_db_identify on the number of registers each had to get
+// right, so nothing here depends on the order these two rows are written in.
 static const IdCheck qmc5883l_checks[] = {{0x0D, 0xFF, M8, false, false}};
+// QST QMC5883P Rev. E section 9.2.1: "Register 00H stores the chip ID. The
+// default value is 80H." Section 5.4: "The default I2C address for QMC5883P is
+// 2CH." Not the same part as the QMC5883L above and not at the same address --
+// a GY-271 board photographed at 0x2C is a QMC5883P candidate, and this row is
+// what would confirm it. Nobody has read 0x2C on one yet.
+static const IdCheck qmc5883p_checks[] = {{0x00, 0x80, M8, false, false}};
+// WIA1 at 0x00 is the AKM company code and WIA2 at 0x01 the device code, both
+// fixed. The two values are the one thing in this row that does NOT come from a
+// datasheet read for it: AKM publishes the register map only in the full
+// MS1526-E-01, which would not download here, and the ShortDatasheet-E-00 that
+// did has no register section. They are the values issue #38 cites from
+// MS1526-E-01 sections 7.1.4 and 8.3.1, and they are also what a purple
+// AK09911C breakout answered on 8 Sep 2026, reading 48 05 20 00 across
+// 0x00-0x03. Two independent sources agreeing, neither of them read here.
+//
+// That same board is why this row exists: it was being reported as a GENUINE
+// QMC5883L, because 0x0D on it reads 0xFF too.
+static const IdCheck ak09911_checks[] = {
+    {0x00, 0x48, M8, false, false},
+    {0x01, 0x05, M8, false, false},
+};
 
 /* --- light / proximity / ToF --- */
 // ST time-of-flight parts index their registers with a 16-bit address.
@@ -192,6 +219,15 @@ static const ChipEntry chip_db[] = {
      3,
      "EOL since 2016, mostly fake"},
     {"QMC5883L", "Magnetometer", {0x0D, 0xFF}, 0, 0, qmc5883l_checks, 1, NULL},
+    {"QMC5883P", "Magnetometer", {0x2C, 0xFF}, 0, 0, qmc5883p_checks, 1, NULL},
+    {"AK09911",
+     "Magnetometer",
+     {0x0C, 0x0D, 0xFF},
+     0,
+     0,
+     ak09911_checks,
+     2,
+     "RST must be high to answer"},
 
     {"VL53L0X", "Laser rangefinder", {0x29, 0xFF}, 0, 0, vl53l0x_checks, 1, NULL},
     {"VL53L1X", "Laser rangefinder", {0x29, 0xFF}, 0, 0, vl53l1x_checks, 2, NULL},
@@ -662,6 +698,28 @@ static const ChipModePin chip_mode_pins[] = {
     // ADI ADXL345: "I2C mode is enabled if the CS pin is tied high to VDD I/O.
     // The CS pin should always be tied high to VDD I/O."
     {"ADXL345/343", "CS", ModePinProtocol, ModeAltSpi, true, false},
+
+    // AKM AK09911 ShortDatasheet-E-00 section 6.2: "(3) Reset pin (RSTN) --
+    // AK09911 is reset by Reset pin. When Reset pin is not used, connect to
+    // VID." The pin table puts RSTN in the VID domain, and the reset-current
+    // figure IDD4 is specified with "RSTN pin = 'L'", which is what makes the
+    // low the asserted level and the high the one this app needs.
+    //
+    // Held low the part is in reset and acknowledges nothing, which on a sweep
+    // looks exactly like an empty bus. A purple AK09911C breakout brings RST
+    // out to a pad with no pull-up on it, so a module wired VCC/GND/SDA/SCL and
+    // nothing else ships in that state and scans as absent.
+    //
+    // Nothing is latched -- reset is held, not sampled -- so raising the pad is
+    // enough on its own, and there is no moment where letting go is safe. This
+    // is the first row of its kind here: the XSHUT/RES/EN screen has been
+    // giving advice with no verified part behind it since it was written.
+    //
+    // The CAD pad on the same board is deliberately not here. Same datasheet,
+    // slave address table: CAD to VSS is 0001100 and CAD to VDD is 0001101, so
+    // it picks between 0x0C and 0x0D and the sweep covers both. An address pin
+    // cannot hide a part from this app.
+    {"AK09911", "RST", ModePinEnable, ModeAltOff, true, false},
 };
 
 #define CHIP_MODE_PIN_COUNT (sizeof(chip_mode_pins) / sizeof(chip_mode_pins[0]))

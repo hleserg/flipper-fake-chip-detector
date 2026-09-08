@@ -18,7 +18,7 @@ do it. Generated from [`chip_db.c`](chip_db.c) — the app and this table cannot
 If your chip is missing, the app says so plainly rather than calling it a fake — see
 [Adding a chip](#adding-a-chip) below.
 
-## Chips with a factory ID register (51)
+## Chips with a factory ID register (53)
 
 These can be verified. A mismatch here is real evidence that the part is not what the
 label claims.
@@ -61,6 +61,8 @@ label claims.
 | **MMC5603** | Magnetometer | 0x30 | `0x39` | `0x10` | 8-bit | — |  |
 | **HMC5883L** | Magnetometer | 0x1E | `0x0A`<br>`0x0B`<br>`0x0C` | `0x48`<br>`0x34`<br>`0x33` | 8-bit<br>8-bit<br>8-bit | — | EOL since 2016, mostly fake |
 | **QMC5883L** | Magnetometer | 0x0D | `0x0D` | `0xFF` | 8-bit | — |  |
+| **QMC5883P** | Magnetometer | 0x2C | `0x00` | `0x80` | 8-bit | — |  |
+| **AK09911** | Magnetometer | 0x0C, 0x0D | `0x00`<br>`0x01` | `0x48`<br>`0x05` | 8-bit<br>8-bit | — | RST must be high to answer |
 | **VL53L0X** | Laser rangefinder | 0x29 | `0xC0` | `0xEE` | 8-bit | — |  |
 | **VL53L1X** | Laser rangefinder | 0x29 | `0x010F` MODEL_ID<br>`0x0110` MODULE_TYPE | `0xEA`<br>`0xCC` | 8-bit<br>8-bit | — |  |
 | **VL6180X** | Laser rangefinder | 0x29 | `0x0000` | `0xB4` | 8-bit | Watch it measure |  |
@@ -119,7 +121,7 @@ ever exist, because asking the part to do its job is the one question left to as
 | **MAX44009** | Light sensor | 0x4A, 0x4B | — |  |
 | **BNO085** | 9-axis fusion IMU | 0x4A, 0x4B | — | SHTP protocol, no WHO_AM_I |
 
-## Addresses more than one chip answers on (49)
+## Addresses more than one chip answers on (50)
 
 **An I2C address does not name a part.** It is seven bits chosen by the manufacturer,
 and plenty of unrelated chips chose the same ones. This is why the app probes rather
@@ -129,6 +131,7 @@ reports one part at a crowded address has already ruled the others out.
 
 | Address | Chips that use it |
 |---|---|
+| `0x0D` | **QMC5883L** (Magnetometer), **AK09911** (Magnetometer) |
 | `0x18` | **BMI088 accel** (Accelerometer), **LIS3DH/2DH12** (Accelerometer) |
 | `0x19` | **BMI088 accel** (Accelerometer), **LIS3DH/2DH12** (Accelerometer) |
 | `0x1D` | **ADXL345/343** (Accelerometer), **ADXL355** (Accelerometer) |
@@ -183,7 +186,7 @@ Reading this the other way: a chip whose neighbours all have ID registers is saf
 identify by probing, and one sharing an address with an address-only part is not — the
 app will say DETECTED rather than guess between them.
 
-### Chips that can sit at more than one address (39)
+### Chips that can sit at more than one address (40)
 
 A pin on the module picks which. If a scan finds nothing, the pin is worth checking
 before the wiring is: the app searches every address in this list, but only the ones
@@ -221,6 +224,7 @@ in it.
 | **ADXL345/343** | `0x53`, `0x1D` |  |
 | **ADXL355** | `0x1D`, `0x53` |  |
 | **LIS3MDL** | `0x1C`, `0x1E` |  |
+| **AK09911** | `0x0C`, `0x0D` | RST must be high to answer |
 | **LPS22HB** | `0x5C`, `0x5D` |  |
 | **LPS25HB** | `0x5C`, `0x5D` |  |
 | **SSD1306/SH1106** | `0x3C`, `0x3D` | SH1106 fakes undetectable |
@@ -243,7 +247,7 @@ separates them by reading four ID registers rather than one — CHIP_ID plus the
 BMA280, BMM150 and BMG160 sub-IDs, which clones get wrong far more often than they get
 CHIP_ID wrong.
 
-## Chips that can be strapped off the I2C bus (7)
+## Chips that can be strapped off the I2C bus (8)
 
 These parts have a pin that decides whether they speak I2C at all. Set the wrong way —
 by the board, by the factory, or by one glitch on the pad — the part is healthy, powered
@@ -259,6 +263,7 @@ address to answer on. An empty scan is not evidence that a chip is dead.
 | **LIS3DH/2DH12** | `CS` | HIGH | SPI | takes effect at once |
 | **LSM6DS3** | `CS` | HIGH | SPI | takes effect at once |
 | **ADXL345/343** | `CS` | HIGH | SPI | takes effect at once |
+| **AK09911** | `RST` | HIGH | nothing — it is held off | takes effect at once |
 
 The last column is not a detail. A latched pin is sampled at reset and nowhere else, so
 strapping the pad and rescanning changes nothing and looks like proof the part is

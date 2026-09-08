@@ -79,6 +79,21 @@ bool i2c_worker_read_reg16_addr(
 
 /* ---------------- Reading the database back ---------------- */
 
+#define COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
+// Can one bus satisfy both signatures at once? Only if they never disagree
+// about a register: two chips that read the same address for different values
+// are already told apart and are not the ambiguous case.
+static bool checks_compatible(const ChipEntry* a, const ChipEntry* b) {
+    for(uint8_t i = 0; i < a->check_count; i++) {
+        for(uint8_t j = 0; j < b->check_count; j++) {
+            if(a->checks[i].reg != b->checks[j].reg) continue;
+            if(a->checks[i].expected != b->checks[j].expected) return false;
+        }
+    }
+    return true;
+}
+
 static bool entry_has_addr(const ChipEntry* chip, uint8_t addr7) {
     if(chip->range_lo && addr7 >= chip->range_lo && addr7 <= chip->range_hi) return true;
     for(size_t i = 0; i < CHIP_MAX_ADDRS && chip->addrs[i] != 0xFF; i++) {
@@ -242,6 +257,78 @@ static void case_partial_match_still_accuses(void) {
     printf("  0x%02X: half a %s -> LIKELY FAKE\n", chip->addrs[0], chip->name);
 }
 
+static void case_ak09911_beats_the_0d_collision(void) {
+    // The capture that opened issue #38. A purple AK09911C breakout at 0x0D:
+    // its WIA pair reads 48 05, and register 0x0D on it reads 0xFF, which is
+    // the whole of the QMC5883L signature. Both candidates match fully, so
+    // before the change the answer was whichever row came first -- and it came
+    // out as a GENUINE QMC5883L.
+    const RegVal regs[] = {{0x00, 0x48}, {0x01, 0x05}, {0x0D, 0xFF}};
+    bus = (typeof(bus)){.addr = 0x0D, .regs = regs, .reg_count = COUNT(regs)};
+
+    ChipIdentification id;
+    chip_db_identify(0x0D, &id);
+    assert(id.verdict == VerdictGenuine);
+    assert(id.chip && strcmp(id.chip->name, "AK09911") == 0);
+    assert(id.read_count == 2); // both WIA registers, not the single 0xFF
+    printf("  0x0D: 48 05 with 0D=FF -> GENUINE %s\n", id.chip->name);
+
+    // And the other way round, so that preferring the AK09911 has not simply
+    // replaced one wrong answer with another. A real QMC5883L answers 0x0D
+    // with 0xFF, and its 0x00/0x01 are live X-axis data.
+    const RegVal qmc[] = {{0x00, 0x1E}, {0x01, 0xA3}, {0x0D, 0xFF}};
+    bus = (typeof(bus)){.addr = 0x0D, .regs = qmc, .reg_count = COUNT(qmc)};
+    chip_db_identify(0x0D, &id);
+    assert(id.verdict == VerdictGenuine);
+    assert(id.chip && strcmp(id.chip->name, "QMC5883L") == 0);
+    printf("  0x0D: 0D=FF, WIA wrong -> GENUINE %s\n", id.chip->name);
+}
+
+static void case_equal_evidence_stays_ambiguous(void) {
+    // Two parts at one address, each with the same number of ID registers, and
+    // a bus that satisfies both. Nothing separates them, so neither is named.
+    // The pair is looked up rather than written down: this is a guard against
+    // a future row, and it should start covering one the day it appears.
+    const ChipEntry* a = NULL;
+    const ChipEntry* b = NULL;
+    uint8_t addr = 0;
+    for(uint8_t candidate = 0x08; candidate <= 0x77 && !a; candidate++) {
+        for(size_t i = 0; i < chip_db_count() && !a; i++) {
+            const ChipEntry* x = chip_db_get(i);
+            if(!x->checks || !entry_has_addr(x, candidate)) continue;
+            for(size_t j = i + 1; j < chip_db_count(); j++) {
+                const ChipEntry* y = chip_db_get(j);
+                if(!y->checks || !entry_has_addr(y, candidate)) continue;
+                if(y->check_count != x->check_count) continue;
+                if(!checks_compatible(x, y)) continue; // both can be true at once
+                a = x;
+                b = y;
+                addr = candidate;
+                break;
+            }
+        }
+    }
+    if(!a) {
+        printf("  (no two same-weight signatures can both match; branch idle)\n");
+        return;
+    }
+
+    RegVal regs[CHIP_MAX_CHECKS * 2];
+    size_t n = 0;
+    for(uint8_t i = 0; i < a->check_count; i++)
+        regs[n++] = (RegVal){a->checks[i].reg, (uint8_t)a->checks[i].expected};
+    for(uint8_t i = 0; i < b->check_count; i++)
+        regs[n++] = (RegVal){b->checks[i].reg, (uint8_t)b->checks[i].expected};
+    bus = (typeof(bus)){.addr = addr, .regs = regs, .reg_count = n};
+
+    ChipIdentification id;
+    chip_db_identify(addr, &id);
+    assert(id.verdict == VerdictAmbiguous);
+    assert(id.chip == NULL);
+    assert(id.candidates >= 2);
+    printf("  0x%02X: %s and %s both fit -> AMBIGUOUS\n", addr, a->name, b->name);
+}
+
 int main(void) {
     printf("chip_db_identify:\n");
     case_two_no_id_parts_stay_unnamed();
@@ -249,6 +336,8 @@ int main(void) {
     case_silent_device_keeps_its_reads();
     case_unknown_address_is_probed();
     case_partial_match_still_accuses();
+    case_ak09911_beats_the_0d_collision();
+    case_equal_evidence_stays_ambiguous();
     printf("ok\n");
     return 0;
 }
