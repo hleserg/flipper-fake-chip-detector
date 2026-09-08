@@ -509,7 +509,9 @@ static void draw_verdict_icon(Canvas* canvas, uint8_t cx, uint8_t cy, ChipVerdic
         break;
     case VerdictNoMatch:
     case VerdictUnknown:
-        // Question mark in a ring
+    case VerdictAmbiguous:
+        // Question mark in a ring. Ambiguous belongs here and not with the
+        // silent ring: the bus answered, the identity is what is unresolved.
         canvas_draw_circle(canvas, cx, cy, 7);
         canvas_draw_line(canvas, cx - 2, cy - 3, cx + 1, cy - 4);
         canvas_draw_line(canvas, cx + 1, cy - 4, cx + 2, cy - 1);
@@ -946,8 +948,11 @@ static I2CNotifyKind verdict_notify_kind(ChipVerdict verdict) {
     case VerdictNoAnswer:
         return I2CNotifyBad;
     case VerdictUnknown:
-    case VerdictAmbiguous:
         return I2CNotifyAttention;
+    // Neutral, like DetectedNoId, because it lands on the same screen and for
+    // the same reason: something real answered and this tool cannot name it.
+    case VerdictAmbiguous:
+        return I2CNotifyNeutral;
     default:
         return I2CNotifyNeutral;
     }
@@ -1155,7 +1160,7 @@ static const PadFamily pad_families[SILENT_ROWS] = {
     // exactly as long as the pin is low. Nothing is latched, so there is no
     // moment where letting go is safe.
     {
-        .labels = "XSHUT  RES  EN",
+        .labels = "XSHUT  RES  EN  RST",
         .when_high = "High = enabled. Not this.",
         .when_low = "Low holds it in reset.",
         .explains_low = true,

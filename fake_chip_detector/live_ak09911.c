@@ -261,6 +261,18 @@ static void ak_run(const LiveTestEnv* env) {
         snprintf(st.lines[1], LIVE_TEST_LINE_LEN, "Hold it still.");
         publish(ctx, &st);
 
+        // The sequence issue #38 asks for is "enter power-down, clear any
+        // previous ready sample through ST2, request 31=10". The middle step
+        // is not decoration: DRDY clears on an ST2 read and not on a mode
+        // write, so a part that an earlier run left in continuous mode still
+        // has an earth-field measurement waiting -- and the first poll after
+        // the self-test write would return that, unmeasured by the self-test
+        // coil, as the self-test result. The read is discarded and its failure
+        // ignored: there may be nothing pending, and whether the bus works is
+        // about to be established by the self-test itself.
+        uint8_t stale[AK_BURST_LEN] = {0};
+        i2c->read_mem(addr7, AK_REG_ST1, stale, sizeof(stale), LIVE_TEST_TIMEOUT_MS);
+
         int32_t self[3] = {0};
         uint16_t dropped = 0;
         bool self_ok = false;
