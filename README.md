@@ -36,9 +36,16 @@ copy it to `apps/GPIO/` on the SD card, or drag it onto qFlipper.
 | Official | `fake_chip_detector-official.fap` | 1.4.3, API 87.1 |
 | Momentum | `fake_chip_detector-momentum.fap` | `mntm-012`, API 87.1 |
 
-A FAP is tied to the firmware API it was built against. Take the wrong one and the loader
-refuses it — "App Too Old", or an API mismatch — which is annoying but harmless. Take the right
+A FAP is tied to the firmware it was built against by two things and only two: the API **major**
+version and the hardware target. The minor version is not compared — that check is present but
+commented out in all three firmwares. Take a file built for the wrong major and the loader
+refuses it — "App Too Old", or "App Too New" — which is annoying but harmless. Take the right
 one and it just runs.
+
+Rechecked on 9 Sep 2026. Official is still 1.4.3 and Momentum still `mntm-012`, exactly what
+these two files were built against. Unleashed has moved on to `unlshd-092`, API 88.4, and the
+file above — built against 88.2 — still runs on it: same major, and every symbol it imports is
+still exported. The assets have not been rebuilt because a rebuild would change nothing.
 
 > **Only the Unleashed build has been run on hardware.** The other two compile cleanly against
 > their SDKs and that is all anybody knows about them. If you run one, please say what happened —
@@ -153,7 +160,8 @@ ufbt            # build
 ufbt launch     # build, install and run
 ```
 
-Developed against Unleashed `unlshd-090`, SDK API 88.2, target f7. The other two release builds
+Developed against Unleashed `unlshd-090`, SDK API 88.2, target f7; it also builds clean
+against `unlshd-092`, API 88.4, which is what CI now uses. The other two release builds
 come from the same source with a different SDK deployed — `ufbt` keeps its state in one place,
 so give each firmware its own:
 

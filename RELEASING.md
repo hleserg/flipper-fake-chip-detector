@@ -50,6 +50,18 @@ gh run watch $(gh run list --workflow=release.yml -L1 --json databaseId --jq '.[
 gh release view v0.8.0 --json assets --jq '[.assets[].name]'
 ```
 
+The workflow builds against each firmware's **current** `release` SDK, so the API version on
+the assets moves whenever that SDK does. Within one major that is a non-event — the loader
+compares the major and nothing else (see BACKLOG.md) — and a firmware bump on its own is not a
+reason to re-cut binaries. What is worth checking when the SDK major has moved, or when a
+release adds code, is that the app imports nothing the older firmware lacks:
+
+```bash
+arm-none-eabi-readelf -sW dist/fake_chip_detector.fap | awk '$7=="UND" && $8!=""{print $8}' | sort -u
+```
+
+against `targets/f7/api_symbols.csv` from the oldest firmware you mean to support.
+
 If a firmware's SDK is broken that day the other two still upload (`fail-fast: false`). Say so
 in the release notes rather than pretending three builds exist. To retry one later:
 

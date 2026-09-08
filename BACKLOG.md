@@ -79,9 +79,15 @@ Four outbound pull requests, none of them on this repo. Status as of 18 Aug 2026
 
 - **Run `ufbt` from `fake_chip_detector/`**, never from the repo root, or it cannot find
   `application.fam`.
-- **The SDK minor-API trap.** The loader requires the app's minor API to be **no higher**
-  than the firmware's. An app built against API 88.3 will not start on a 88.2 firmware;
-  one built against 88.2 loads on both.
+- **The minor API version is not a trap, and it is not checked.** Read
+  `lib/flipper_application/application_manifest.c` before believing otherwise: the loader
+  compares the API **major** and the hardware target, and the minor comparison sits inside a
+  `/* */` in official 1.4.3, `unlshd-092` and `mntm-012` alike. An app built against 88.4 does
+  start on an 88.2 firmware. What can still break is a symbol: the ELF loader resolves imports
+  against the firmware's table, so an app using something added after 88.2 fails to load there
+  for that reason, not for its version number. To check before shipping, diff the app's
+  undefined symbols against the older SDK's `targets/f7/api_symbols.csv` — on 9 Sep 2026 all
+  196 imports of the 88.4 build were present in `unlshd-090`.
 - `~/.ufbt/current` is **machine-wide shared state.** Changing the SDK affects anything else
   building on that machine.
 - **`python tools/gen_supported_chips.py --check` must pass.** It regenerates
