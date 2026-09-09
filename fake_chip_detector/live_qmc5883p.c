@@ -83,6 +83,10 @@
 // only cost of being generous here is ten milliseconds once per run.
 #define QMC_SELFTEST_MS 10
 
+// The datasheet gives no settling time for the soft reset anywhere. Ten is the
+// same generous round number for the same reason -- it is paid twice per run.
+#define QMC_RESET_SETTLE_MS 10
+
 // Rev. C Table 2, page 8: sensitivity is 1000 LSB/G at the +/-30 G range and
 // 3750 LSB/G at +/-8 G. The self-test runs at the reset range because the
 // datasheet's example does; the measurement phase runs at +/-8 G because its
@@ -162,11 +166,44 @@ static void qmc_delay(const volatile bool* stop, uint32_t ms) {
     }
 }
 
+// Section 7.6's soft reset, used as the first step of every configuration here
+// rather than only as the last step of the run. Table 18: it restores "default
+// value of all registers" and "can be invoked at any time of any mode", and the
+// default mode is Suspend -- which is also what section 9.2.3 asks for when it
+// says "Suspend Mode should be added in the middle of mode shifting between
+// Continuous Mode, Single Mode and Normal Mode". One write therefore does both
+// jobs: it clears whatever the previous pass left in 0AH, 0BH and 29H, and it
+// puts the part in the mode the next write is allowed to leave.
+//
+// This is not tidiness. On silicon the first run of this test passed and the
+// second did not, because the second began on a part still carrying the first
+// run's state, and every number after that was measured through a
+// configuration nobody had established.
+static bool qmc_reset(const LiveTestI2c* i2c, uint8_t addr7, const volatile bool* stop) {
+    if(!i2c->write_reg(addr7, QMC_REG_CTRL2, QMC_CTRL2_SOFTRST, LIVE_TEST_TIMEOUT_MS))
+        return false;
+    qmc_delay(stop, QMC_RESET_SETTLE_MS);
+    return true;
+}
+
 static LiveTestIdResult qmc_identify(const LiveTestI2c* i2c, uint8_t addr7) {
     uint8_t id = 0;
     if(!live_test_read_id8(i2c, addr7, QMC_REG_CHIPID, &id))
         return live_test_id_unreadable(i2c, addr7);
     return id == QMC_CHIPID ? LiveTestIdMatch : LiveTestIdMismatch;
+}
+
+// The six data bytes, assembled. Table 15 has them LSB register first then MSB
+// for each axis, "16-bit data width in 2's complement". Getting that backwards
+// produces numbers that look entirely plausible and are not.
+static bool qmc_read_data(const LiveTestI2c* i2c, uint8_t addr7, int32_t out[3]) {
+    uint8_t buf[QMC_DATA_LEN] = {0};
+    if(!i2c->read_mem(addr7, QMC_REG_XOUT_LSB, buf, sizeof(buf), LIVE_TEST_TIMEOUT_MS))
+        return false;
+    for(uint8_t axis = 0; axis < 3; axis++) {
+        out[axis] = (int16_t)((uint16_t)buf[axis * 2] | ((uint16_t)buf[axis * 2 + 1] << 8));
+    }
+    return true;
 }
 
 // One measurement: wait for DRDY in 09H, then read the six data bytes. The
@@ -192,15 +229,7 @@ static QmcSampleResult qmc_read_sample(
         }
         if(status & QMC_ST_OVFL) return QmcSampleOverflow;
 
-        uint8_t buf[QMC_DATA_LEN] = {0};
-        if(!i2c->read_mem(addr7, QMC_REG_XOUT_LSB, buf, sizeof(buf), LIVE_TEST_TIMEOUT_MS))
-            return QmcSampleFailed;
-
-        for(uint8_t axis = 0; axis < 3; axis++) {
-            // LSB register first, then MSB -- Table 15. Getting this backwards
-            // produces numbers that look entirely plausible and are not.
-            out[axis] = (int16_t)((uint16_t)buf[axis * 2] | ((uint16_t)buf[axis * 2 + 1] << 8));
-        }
+        if(!qmc_read_data(i2c, addr7, out)) return QmcSampleFailed;
         return QmcSampleOk;
     }
     return QmcSampleFailed;
@@ -216,6 +245,7 @@ static bool qmc_self_test(
     uint8_t addr7,
     const volatile bool* stop,
     int32_t delta[3]) {
+    if(!qmc_reset(i2c, addr7, stop)) return false;
     if(!i2c->write_reg(addr7, QMC_REG_SIGN, QMC_SIGN_VALUE, LIVE_TEST_TIMEOUT_MS)) return false;
     if(!i2c->write_reg(addr7, QMC_REG_CTRL1, QMC_CTRL1_SELFRUN, LIVE_TEST_TIMEOUT_MS))
         return false;
@@ -227,8 +257,16 @@ static bool qmc_self_test(
         return false;
     qmc_delay(stop, QMC_SELFTEST_MS);
 
+    // Section 7.3 waits and then reads, with no second look at 09H: "Waiting 5
+    // millisecond until measurement ends / Read data Register 01H ~ 06H".
+    // Section 6.2.3 says why that is not an oversight -- the self-test "can
+    // only be enabled in Continuous Mode and enters in Suspend Mode after the
+    // data is updated", so a part that has finished is a part that has stopped,
+    // and DRDY is a flag on a sample that is not coming. Waiting for it here is
+    // what made the second run on silicon report "No self-test" from a part
+    // that had just done one.
     int32_t after[3] = {0};
-    if(qmc_read_sample(i2c, addr7, stop, after) != QmcSampleOk) return false;
+    if(!qmc_read_data(i2c, addr7, after)) return false;
 
     delta[0] = before[0] - after[0];
     delta[1] = after[1] - before[1];
@@ -297,9 +335,12 @@ static void qmc_run(const LiveTestEnv* env) {
 
         // --- Continuous measurement -------------------------------------
         // Section 6.2.3 has the self-test drop the part into Suspend Mode when
-        // it finishes, so this is a fresh configuration and not a tweak to a
-        // running one: section 7.2's example, all three writes, in its order.
+        // it finishes -- but only when it finishes, and the self-test above is
+        // allowed to fail halfway with 0BH already written. So the mode is
+        // established rather than assumed, and then section 7.2's example
+        // follows, all three writes, in its order.
         const bool measuring =
+            qmc_reset(i2c, addr7, stop) &&
             i2c->write_reg(addr7, QMC_REG_SIGN, QMC_SIGN_VALUE, LIVE_TEST_TIMEOUT_MS) &&
             i2c->write_reg(addr7, QMC_REG_CTRL2, QMC_CTRL2_RUN, LIVE_TEST_TIMEOUT_MS) &&
             i2c->write_reg(addr7, QMC_REG_CTRL1, QMC_CTRL1_CONT, LIVE_TEST_TIMEOUT_MS);
