@@ -13,6 +13,15 @@
   HMC5883L made famous and the number people still search for. The die inside one bought today is
   usually a QST part, and a P is not register-compatible with either the HMC5883L or the
   QMC5883L, so a driver written for the name on the silkscreen will not talk to it.
+- **The QMC5883P has a live test now.** It fires the part's internal self-test coil and checks
+  that all three channels deflect, then asks the field to move by 300 counts on two different
+  axes while the board is turned. The coil half is deliberately a floor rather than a
+  specification: QST's datasheet says to compare the deflection with a threshold value and then
+  publishes no threshold anywhere, so the test checks that a deflection happened at all, by a
+  margin three times the part's own documented noise. Not run on hardware — the movement
+  threshold is arithmetic off the datasheet's sensitivity figure, and the lesson from the
+  AK09911 is that a threshold means nothing until the still part's noise floor is measured
+  under it.
 - **The QMC5883P row has met a part.** It was added in 0.8 from its datasheet with nothing to
   answer it. On 9 Sep 2026 a blue GY-271 board answered at 0x2C and read 0x80 at register 0x00,
   which is that row and no other.

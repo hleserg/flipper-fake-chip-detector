@@ -54,7 +54,7 @@ still exported. The assets have not been rebuilt because a rebuild would change 
 > report; so is a photo of it failing.
 
 **This is 0.10, and the number is honest.** Two sensors have been driven end to end on real
-silicon. Twelve of the fourteen live tests have never met the chip they were written for. It
+silicon. Thirteen of the fifteen live tests have never met the chip they were written for. It
 goes to 1.0 when other people's hardware has had a say.
 
 **New to this?** **[GUIDE.md](GUIDE.md)** walks through the whole thing with screenshots at every
@@ -106,8 +106,9 @@ one register — this app does that and shows its work.
   SHT31 and watch the humidity climb; cover a BH1750 and watch it hit the dark floor its
   datasheet specifies; tip an MPU6050, MPU6500, MPU9250 or ADXL345 and watch gravity move to
   another axis; wave at an APDS9960; point an MLX90614 at your palm; watch a DS3231 tick; make
-  an SSD1306 blink; turn a BNO055 through a figure-8 until it calibrates; hold a hand in front
-  of a VL6180X and watch the distance follow it. This matters most for the parts with
+  an SSD1306 blink; turn a BNO055 through a figure-8 until it calibrates; turn an AK09911 or a
+  QMC5883P over and watch the earth's field follow it; hold a hand in front of a VL6180X and
+  watch the distance follow it. This matters most for the parts with
   **no ID register at all** — for a DS3231 or an AHT20 the app can otherwise only say "something
   is there", so a live test is the only evidence that will ever exist. **Live tests** in the
   menu lists every test and runs any of them on demand, without scanning first.

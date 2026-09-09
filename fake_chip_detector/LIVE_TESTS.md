@@ -232,6 +232,16 @@ tick when it is reached. Pick something the part cannot fake by holding still:
   choosing a movement threshold for a magnetometer, measure the still part first: the noise
   floor is the half that says whether the number means anything.
 
+- **QMC5883P** — the internal self-test coil deflects all three channels by more than the
+  part's own published noise, **and** the field afterwards moves by 300 counts on two different
+  axes at the ±8 G range. The coil half is deliberately a floor and not a specification: QST
+  says to "compare with threshold value" and then publishes no threshold anywhere in the
+  datasheet, so this checks that a deflection happened at all, by a margin three times the
+  documented standard deviation. Three hundred is arithmetic, not measurement — the earth is
+  0.25 to 0.65 G, which is 937 counts at the weakest place on earth and 1875 of swing when a
+  board is turned end over end — and it has never been compared against a still part. Do that
+  before trusting it.
+
 Two of these are worth copying for the shape rather than the numbers. The BH1750 test insists
 on **both directions**, which is what stops a dead part passing by accident. The accelerometer
 tests pass on a **change of which axis** holds gravity rather than on any absolute value, so
