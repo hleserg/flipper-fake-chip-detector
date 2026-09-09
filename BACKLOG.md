@@ -2,7 +2,7 @@
 
 Where the work stands, what is blocked and on what, and — most importantly — **which merged
 changes have never been run on real hardware.** Written 20 Aug 2026, last touched after the
-QMC5883P bench session of 9 Sep 2026.
+QMC5883P bench session of 9 Sep 2026 and the 0.12/0.13 releases the same day.
 
 If you are picking this up cold, read [README.md](README.md) for what the app is, then this
 file for what is left.
@@ -98,14 +98,15 @@ that was measured, not assumed. The ladder works around it by asking the user.
 
 ## Getting the app into the firmware catalogs
 
-Four outbound pull requests, none of them on this repo. Status as of 18 Aug 2026:
+Four outbound pull requests, none of them on this repo. Status as of 9 Sep 2026, all pointing
+at v0.13.0 (`596862c`):
 
 | Catalog | PR | State |
 |---|---|---|
-| Unleashed | `xMasterX/all-the-plugins#254` | **Merged**, and confirmed by eye in the catalog. |
-| Official | `flipperdevices/flipper-application-catalog#1183` | Changes requested. Both review items addressed 12 Aug, branch bumped 16 Aug, no reply since. The `fixes needed` label is still on. Its `task-list-completed` check sits at 6/10 and cannot go green here: three of the four remaining boxes belong to the reviewer, not the submitter. |
-| Momentum | `Next-Flip/Momentum-Apps#82` | Untouched since 11 Aug. |
-| Curated list | `djsime1/awesome-flipperzero#172` | Untouched since 11 Aug. |
+| Unleashed | `xMasterX/all-the-plugins#265` | Open, based on `dev`. **The app is already merged there** — xMasterX took the 0.10 copy in themselves on 9 Sep and closed #264 with "Already updated"; their `dev` still carries 0.10, so #265 brings it to 0.13. Their own UI fix is in that copy, which is why the source packs have to be re-based on `dev` rather than copied over blind. |
+| Official | `flipperdevices/flipper-application-catalog#1220` | Changes requested by xMasterX on 9 Sep, with a patch attached — the Right key drawn off the bottom of the screen, and the pad meter's title running through its key hint. Applied as written with their authorship (#49) and shipped in 0.13; the PR now points at it. They also asked whether the app should sit in Draft as WIP; the reply says it is beta because most live tests have never met their chip, and offers to move it. |
+| Momentum | `Next-Flip/Momentum-Apps#82` | Open, bumped to 0.13. No maintainer response since 11 Aug. |
+| Curated list | `djsime1/awesome-flipperzero#172` | Open, untouched since 11 Aug. Its one line carries the **chip** count, which has not moved from 82, so releases that only add live tests leave it alone. |
 
 ## Things that will trip you up
 
