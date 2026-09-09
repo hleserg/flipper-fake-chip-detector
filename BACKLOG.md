@@ -34,7 +34,7 @@ tried when a Flipper and the right parts are next in the same room.
 | Live-test verdict wording | #21 | Never seen on a screen. |
 | Chip `kind` renames | #33 | Text only. Widths were measured exactly (see below), not photographed. |
 | AK09911 saturation screen | #44 | The overflow branch was rewritten to publish its own frame instead of freezing the display, and no magnet has been held against a part to watch it. Everything else in this test has now run. |
-| QMC5883P database row, and the `RST` mode pin | #40 | Added from its datasheet alone; no part has answered at 0x2C here. The `RST` pad has never been strapped — the AK09911 board on the bench was wired without it. |
+| QMC5883P live behaviour, and the `RST` mode pin | #40 | The row itself is confirmed: a GY-271 board answered at 0x2C on 9 Sep 2026 and read the chip ID this row expects. What the part *does* is still unproven — it has no live test, so identification is all the evidence there is. The `RST` pad has never been strapped either; neither magnetometer board on the bench was wired for it. |
 | `SEVERAL POSSIBLE` verdict | #40 | Covered by the host test in `tools/chip_db_test/`, which is real coverage of the decision but not of the screen. The summary line, the `Fits:` list on the detail screen and the report paragraph have never been drawn. |
 
 **Run on hardware 9 Sep 2026, and no longer on the list above:** an AK09911 on a Flipper

@@ -53,7 +53,7 @@ still exported. The assets have not been rebuilt because a rebuild would change 
 > [issue](https://github.com/hleserg/flipper-fake-chip-detector/issues). "It works" is a useful
 > report; so is a photo of it failing.
 
-**This is 0.9, and the number is honest.** Two sensors have been driven end to end on real
+**This is 0.10, and the number is honest.** Two sensors have been driven end to end on real
 silicon. Twelve of the fourteen live tests have never met the chip they were written for. It
 goes to 1.0 when other people's hardware has had a say.
 

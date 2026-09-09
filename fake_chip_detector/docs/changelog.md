@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10 — beta
+
+- **A GY-271 board reading QMC5883P no longer looks like a contradiction.** The number
+  silkscreened on a module and the number burned into the die are different things, which is the
+  whole premise of this app, and the one screen that asks **Is this what you bought?** was the
+  one screen that never said so. The database already carried a note field for exactly this — the
+  MPU6500 has said **often sold as MPU9250** since the first release — but the note was only ever
+  drawn on the detail screen behind it. It is on the question screen now, above the verdict, for
+  every chip that has one.
+- **The QMC5883P carries that note: GY-271 board, not a 5883L.** GY-271 is the module name the
+  HMC5883L made famous and the number people still search for. The die inside one bought today is
+  usually a QST part, and a P is not register-compatible with either the HMC5883L or the
+  QMC5883L, so a driver written for the name on the silkscreen will not talk to it.
+- **The QMC5883P row has met a part.** It was added in 0.8 from its datasheet with nothing to
+  answer it. On 9 Sep 2026 a blue GY-271 board answered at 0x2C and read 0x80 at register 0x00,
+  which is that row and no other.
+
 ## 0.9 — beta
 
 - **The AK09911 live test could not pass, and now it has.** It asked for the field to swing 100
