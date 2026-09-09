@@ -14,7 +14,7 @@ file for what is left.
   `SUPPORTED_CHIPS.md matches chip_db.c`, and a build against each of the three firmware
   SDKs (official, Unleashed, Momentum). The builds are the only compile check that exists —
   `ufbt lint` runs clang-format and nothing more.
-- 82 I²C parts and 15 1-Wire families in the database.
+- 82 I²C parts and 15 1-Wire families in the database. 16 live tests.
 - The bench is an `ssh notebook` (Windows) with a Flipper on COM5 running Unleashed. The app
   is installed at `/ext/apps/GPIO/Programmers/fake_chip_detector.fap`; `tools/flipper_rpc.py`
   drives it over the RPC channel for screenshots and key presses.
@@ -35,6 +35,7 @@ tried when a Flipper and the right parts are next in the same room.
 | Chip `kind` renames | #33 | Text only. Widths were measured exactly (see below), not photographed. |
 | AK09911 saturation screen | #44 | The overflow branch was rewritten to publish its own frame instead of freezing the display, and no magnet has been held against a part to watch it. Everything else in this test has now run. |
 | QMC5883P live test thresholds | #46, #47 | The test itself has now run and passed twice on a GY-271 board, most recently on 0.11 — but both of its thresholds are still derived rather than measured: the coil floor from the datasheet's noise figure, the 300-count movement from its sensitivity figure. The still part's noise floor has never been recorded, and one pass came after only two reads, which is few enough that a sensor reconnecting mid-test could supply the swing on its own. Measure the still part, and consider requiring more than two samples before a pass. |
+| QMC5883L live test | #48 | Written from the datasheet and never run: no QMC5883L has been on this bench at all, only a P. Its single threshold — 240 counts of swing on two axes — is arithmetic off the sensitivity figure, and the part has no self-test bit, so there is no second proof under it. First magnetometer that turns up, run it and measure the still part's noise floor while you are there. |
 | The `RST` mode pin | #40 | The `RST` pad has never been strapped; neither magnetometer board on the bench was wired for it. |
 | `SEVERAL POSSIBLE` verdict | #40 | Covered by the host test in `tools/chip_db_test/`, which is real coverage of the decision but not of the screen. The summary line, the `Fits:` list on the detail screen and the report paragraph have never been drawn. |
 

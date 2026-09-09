@@ -20,12 +20,12 @@ Five seconds, at the pickup counter, before you pay.
   ground, SDA shorted to SCL, or the module plugged into the wrong pins entirely — it sweeps the
   other header pins to find where your pull-ups actually are.
 - **Proves the part works, not just that it answers.** An ID register is one byte and a byte can
-  be copied; a working sensor cannot be. Fifteen live tests run on nothing but your hand and
+  be copied; a working sensor cannot be. Sixteen live tests run on nothing but your hand and
   your breath: breathe on an AHT or SHT and watch the humidity climb, cover a BH1750, tip an
   MPU6050 or ADXL345 and watch gravity move axes, wave at an APDS9960, point an MLX90614 at your
   palm, watch a DS3231 tick, make an SSD1306 blink, turn a BNO055 through a figure-8, turn an
-  AK09911 or a QMC5883P over and watch the earth's field follow it, hold your hand in front of a
-  VL6180X.
+  AK09911, a QMC5883L or a QMC5883P over and watch the earth's field follow it, hold your hand
+  in front of a VL6180X.
 - **Scans 1-Wire too**, on pin 17: decodes the family code and runs a real temperature
   conversion, so a DS18S20 sold as a DS18B20 is caught.
 - **Takes tests written by other people.** A live test can be built as a .fal plugin file and dropped into
@@ -53,8 +53,8 @@ The GPIO pins are 3.3 V and not 5 V tolerant.
 
 ## This is a beta
 
-Version 0.11, and the number is honest: three parts have been driven end to end on real silicon,
-and twelve of the fifteen live tests have never met the chip they were written for. If you run
+Version 0.12, and the number is honest: three parts have been driven end to end on real silicon,
+and thirteen of the sixteen live tests have never met the chip they were written for. If you run
 it, please say what happened — a chip it did not recognise is a useful report, not a nuisance.
 
 Source, a step-by-step guide with screenshots, and the full chip list:
