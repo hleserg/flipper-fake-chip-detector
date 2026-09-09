@@ -240,7 +240,8 @@ tick when it is reached. Pick something the part cannot fake by holding still:
   documented standard deviation. Three hundred is arithmetic, not measurement — the earth is
   0.25 to 0.65 G, which is 937 counts at the weakest place on earth and 1875 of swing when a
   board is turned end over end — and it has never been compared against a still part. Do that
-  before trusting it.
+  before trusting it. A GY-271 board passed this test on 9 Sep 2026, which makes the numbers
+  reachable but says nothing about how much room is under them.
 
 Two of these are worth copying for the shape rather than the numbers. The BH1750 test insists
 on **both directions**, which is what stops a dead part passing by accident. The accelerometer

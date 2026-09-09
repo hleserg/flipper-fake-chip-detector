@@ -19,8 +19,13 @@
 // GY-271 on the bench answered at 0x2C and read 0x80 at register 0x00, which is
 // what prompted the file.
 //
-// NOT RUN ON HARDWARE. The sequences are the datasheet's own worked examples
-// and it compiles, but nobody has watched it drive a part. See BACKLOG.md.
+// Run on that board the same day, and it passed: the coil fired, the field
+// followed the board through the earth's, 1036 reads. A second entry into the
+// same screen did not, and the two faults it exposed are fixed above -- the
+// self-test no longer waits for a DRDY the part has stopped producing, and the
+// measurement configuration is established from a soft reset instead of
+// written on top of whatever the previous run left. That fix has not itself
+// been back on silicon. See BACKLOG.md.
 
 // Rev. C section 9.2.1, page 14: "Register 00H stores the chip ID. The default
 // value is 80H." One byte, and the only fixed thing in the map -- which makes

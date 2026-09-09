@@ -2,7 +2,7 @@
 
 Where the work stands, what is blocked and on what, and — most importantly — **which merged
 changes have never been run on real hardware.** Written 20 Aug 2026, last touched after the
-AK09911 bench session of 9 Sep 2026.
+QMC5883P bench session of 9 Sep 2026.
 
 If you are picking this up cold, read [README.md](README.md) for what the app is, then this
 file for what is left.
@@ -34,8 +34,8 @@ tried when a Flipper and the right parts are next in the same room.
 | Live-test verdict wording | #21 | Never seen on a screen. |
 | Chip `kind` renames | #33 | Text only. Widths were measured exactly (see below), not photographed. |
 | AK09911 saturation screen | #44 | The overflow branch was rewritten to publish its own frame instead of freezing the display, and no magnet has been held against a part to watch it. Everything else in this test has now run. |
-| QMC5883P live test, and the `RST` mode pin | #40, #46 | The database row is confirmed: a GY-271 board answered at 0x2C on 9 Sep 2026 and read the chip ID this row expects. What the part *does* is still unproven — there is now a live test for it and no part has run it. Both of its thresholds are derived rather than measured — the coil floor from the datasheet's noise figure, the 300-count movement from its sensitivity figure — which is the same footing that made the AK09911 threshold wrong the first time. Measure the still part before trusting either. The `RST` pad has never been strapped either; neither magnetometer board on the bench was wired for it. |
-| The chip note on the question screen | #45 | Notes moved from the detail screen to the screen that asks whether the part is what was bought, and the verdict and question drop by five to make room. Never photographed: the bench Flipper was in someone else's hands the afternoon this landed. All eleven note strings were measured exactly with `tools/screen_width.py` and the widest clears 128px by four, so the risk is vertical crowding rather than truncation — the question's baseline sits three pixels above the choice bar. |
+| QMC5883P live test, after the fix | #46 | The test has run and passed on a GY-271 board — see below — but the two faults that its second run exposed were fixed afterwards and the fixed code has not been back on silicon. What needs watching when it is: the self-test reports `Coil OK` on a *second* entry and not only a first, and the running screen shows something near 50 µT rather than the 7 µT that second run reported. Both thresholds are still derived rather than measured — the coil floor from the datasheet's noise figure, the 300-count movement from its sensitivity figure — and the still part's noise floor has still never been recorded. |
+| The `RST` mode pin | #40 | The `RST` pad has never been strapped; neither magnetometer board on the bench was wired for it. |
 | `SEVERAL POSSIBLE` verdict | #40 | Covered by the host test in `tools/chip_db_test/`, which is real coverage of the decision but not of the screen. The summary line, the `Fits:` list on the detail screen and the report paragraph have never been drawn. |
 
 **Run on hardware 9 Sep 2026, and no longer on the list above:** an AK09911 on a Flipper
@@ -45,6 +45,15 @@ when it was turned. That session is also what found #44: the screen only draws t
 a heading and progress boxes, so the third was silently dropped, and the movement threshold had
 been calibrated against a magnet and sat above the physical maximum of the earth's field. Both
 are fixed. The AK09911 is the second part ever driven end to end here.
+
+**Also run on hardware 9 Sep 2026:** a blue board silkscreened GY-271 identified as
+`QMC5883P` at 0x2C, and the question screen drew its note — `GY-271 board, not a 5883L` —
+above the verdict with the layout of #45 intact, which is what that change was for. Its live
+test then passed on its first run: 1036 reads, both proof boxes filled, the coil fired and the
+field followed the board. A second entry into the same test did not, and that is what #46
+fixes: the self-test read was waiting on a DRDY the part had already stopped producing, and
+the measurement configuration was written on top of the previous run's mode instead of a mode
+this test had established. Re-run before trusting the fix.
 
 Screen widths in #33 and #34 were measured with
 [`tools/screen_width.py`](tools/screen_width.py), which decodes the real `FontSecondary`

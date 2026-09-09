@@ -53,8 +53,8 @@ The GPIO pins are 3.3 V and not 5 V tolerant.
 
 ## This is a beta
 
-Version 0.10, and the number is honest: two parts have been driven end to end on real silicon,
-and thirteen of the fifteen live tests have never met the chip they were written for. If you run
+Version 0.10, and the number is honest: three parts have been driven end to end on real silicon,
+and twelve of the fifteen live tests have never met the chip they were written for. If you run
 it, please say what happened — a chip it did not recognise is a useful report, not a nuisance.
 
 Source, a step-by-step guide with screenshots, and the full chip list:
