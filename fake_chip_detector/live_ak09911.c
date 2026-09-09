@@ -340,35 +340,39 @@ static void ak_run(const LiveTestEnv* env) {
             st.progress_max = AK_PROOF_STEPS;
             snprintf(st.heading, sizeof(st.heading), "%u", (unsigned)field);
             snprintf(st.unit, sizeof(st.unit), "uT");
-            snprintf(
-                st.lines[0],
-                LIVE_TEST_LINE_LEN,
-                "%ld %ld %ld",
-                (long)raw[0],
-                (long)raw[1],
-                (long)raw[2]);
+            // Two lines, not three. With a big heading and the progress
+            // boxes the generic screen has room for exactly two: it starts at
+            // y=46, steps 9 and stops at 55, so a third is composed and then
+            // silently dropped. That is how this test shipped -- the progress
+            // count and the saturation warning were both written to lines[2]
+            // and neither was ever drawn, which left the screen showing raw
+            // counts and no hint that the user was meant to do anything.
+            //
+            // So line 0 is the instruction, carrying its own feedback the way
+            // the ADXL345 test's "Gravity on X - tip it" does, and line 1 is
+            // the evidence. Raw XYZ came out: the heading is the same field in
+            // uT and it moves, and "1/2 axes" says what the triple was there
+            // to say in the form the user can act on.
+            if(overflows) {
+                // Saying "turn it" at somebody whose sensor is saturating is
+                // advice pointing the wrong way: the field is already too
+                // strong to measure and the magnet needs backing off, not
+                // moving.
+                snprintf(st.lines[0], LIVE_TEST_LINE_LEN, "Too strong - back it off");
+            } else {
+                snprintf(
+                    st.lines[0],
+                    LIVE_TEST_LINE_LEN,
+                    "Turn it over - %u/%u axes",
+                    moved,
+                    AK_MOVE_AXES);
+            }
             snprintf(
                 st.lines[1],
                 LIVE_TEST_LINE_LEN,
                 self_ran ? (self_ok ? "Self-test OK    %lus" : "Self-test FAIL  %lus") :
                            "No self-test    %lus",
                 (unsigned long)((furi_get_tick() - started) / furi_ms_to_ticks(1000)));
-            if(overflows) {
-                // Saying "wave it" at somebody whose sensor is saturating is
-                // advice pointing the wrong way: the field is already too
-                // strong to measure and the magnet needs backing off, not
-                // moving.
-                snprintf(
-                    st.lines[2], LIVE_TEST_LINE_LEN, "Field too strong x%u", (unsigned)overflows);
-            } else {
-                snprintf(
-                    st.lines[2],
-                    LIVE_TEST_LINE_LEN,
-                    "%lu reads, %u/%u axes",
-                    (unsigned long)samples,
-                    moved,
-                    AK_MOVE_AXES);
-            }
             publish(ctx, &st);
         }
 
@@ -387,13 +391,17 @@ static void ak_run(const LiveTestEnv* env) {
             st.progress = AK_PROOF_STEPS;
             snprintf(st.heading, sizeof(st.heading), "%lu", (unsigned long)samples);
             snprintf(st.unit, sizeof(st.unit), "reads");
-            snprintf(st.lines[0], LIVE_TEST_LINE_LEN, "Self-test passed, and");
-            snprintf(st.lines[1], LIVE_TEST_LINE_LEN, "the field followed you.");
-            snprintf(
-                st.lines[2],
-                LIVE_TEST_LINE_LEN,
-                parked ? "%u dropped" : "%u dropped, not parked",
-                (unsigned)dropped);
+            // Same two-line budget as the running screen, and "not parked"
+            // is the half worth keeping: a part left in continuous mode goes
+            // on drawing current and the next run inherits it. The dropped
+            // count was diagnostic and went with the third line.
+            if(parked) {
+                snprintf(st.lines[0], LIVE_TEST_LINE_LEN, "Self-test passed, and");
+                snprintf(st.lines[1], LIVE_TEST_LINE_LEN, "the field followed you.");
+            } else {
+                snprintf(st.lines[0], LIVE_TEST_LINE_LEN, "Passed, but the part was");
+                snprintf(st.lines[1], LIVE_TEST_LINE_LEN, "left configured. Repower.");
+            }
             publish(ctx, &st);
             // The screen belongs to the user now. Nothing is being measured
             // and nothing is configured, so this is a plain wait for Back.
