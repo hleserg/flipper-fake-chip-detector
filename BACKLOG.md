@@ -34,7 +34,7 @@ tried when a Flipper and the right parts are next in the same room.
 | Live-test verdict wording | #21 | Never seen on a screen. |
 | Chip `kind` renames | #33 | Text only. Widths were measured exactly (see below), not photographed. |
 | AK09911 saturation screen | #44 | The overflow branch was rewritten to publish its own frame instead of freezing the display, and no magnet has been held against a part to watch it. Everything else in this test has now run. |
-| QMC5883P live test, after the fixes | #46, #47 | The test has run and passed on a GY-271 board — see below — but everything changed since that pass is unproven. What needs watching: the self-test reports `Coil OK` on a *second* entry and not only a first, the running screen shows something near 50 µT rather than the 7 µT one run reported, and the screen redraws at a walking pace rather than flooding whatever is watching it over USB. Both thresholds are still derived rather than measured — the coil floor from the datasheet's noise figure, the 300-count movement from its sensitivity figure — and the still part's noise floor has still never been recorded. |
+| QMC5883P live test thresholds | #46, #47 | The test itself has now run and passed twice on a GY-271 board, most recently on 0.11 — but both of its thresholds are still derived rather than measured: the coil floor from the datasheet's noise figure, the 300-count movement from its sensitivity figure. The still part's noise floor has never been recorded, and one pass came after only two reads, which is few enough that a sensor reconnecting mid-test could supply the swing on its own. Measure the still part, and consider requiring more than two samples before a pass. |
 | The `RST` mode pin | #40 | The `RST` pad has never been strapped; neither magnetometer board on the bench was wired for it. |
 | `SEVERAL POSSIBLE` verdict | #40 | Covered by the host test in `tools/chip_db_test/`, which is real coverage of the decision but not of the screen. The summary line, the `Fits:` list on the detail screen and the report paragraph have never been drawn. |
 
@@ -53,7 +53,12 @@ test then passed on its first run: 1036 reads, both proof boxes filled, the coil
 field followed the board. A second entry into the same test did not, and that is what #46
 fixes: the self-test read was waiting on a DRDY the part had already stopped producing, and
 the measurement configuration was written on top of the previous run's mode instead of a mode
-this test had established. Re-run before trusting the fix.
+this test had established.
+
+**And again on 0.11, after #47:** the test was re-entered on the same board and passed — the
+coil fired, the field followed, and the field magnitude read 27 µT, inside the earth's 25 to 65.
+That run also confirmed the pacing fix: screenshots over the RPC channel work during the test
+now, where 0.10 flooded the screen stream until USB writes timed out.
 
 Screen widths in #33 and #34 were measured with
 [`tools/screen_width.py`](tools/screen_width.py), which decodes the real `FontSecondary`
