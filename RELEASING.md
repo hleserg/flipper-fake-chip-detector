@@ -14,6 +14,19 @@ clang-format sweep — and the catalog was submitted at `f7df74a`. Nothing broke
 the five changed behaviour, but the binaries people downloaded were not built from the code the
 catalog builds. Cut the tag last and the question does not arise.
 
+v0.8.0 got it wrong the same way and then fixed it, which is the more useful half of the story.
+The tag was cut at `9848135`; validating the catalog manifest then turned up backticks in the
+changelog, and the fix landed as `8a8aade`. The first instinct was to explain the mismatch in the
+release notes. **Move the tag instead** — it takes a minute and leaves nothing to explain:
+
+```bash
+git tag -f v0.8.0 <new commit> && git push -f origin v0.8.0
+gh workflow run release.yml -f tag=v0.8.0
+```
+
+`release.yml` uploads with `--clobber`, so the rebuilt assets replace the old ones in place and
+the download URLs do not change. Then delete whatever apology the notes had picked up.
+
 ## 1. Before the tag
 
 ```bash
