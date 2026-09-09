@@ -1,7 +1,8 @@
 # Backlog and handover
 
 Where the work stands, what is blocked and on what, and — most importantly — **which merged
-changes have never been run on real hardware.** Written 20 Aug 2026.
+changes have never been run on real hardware.** Written 20 Aug 2026, last touched after the
+AK09911 bench session of 9 Sep 2026.
 
 If you are picking this up cold, read [README.md](README.md) for what the app is, then this
 file for what is left.
@@ -13,7 +14,10 @@ file for what is left.
   `SUPPORTED_CHIPS.md matches chip_db.c`, and a build against each of the three firmware
   SDKs (official, Unleashed, Momentum). The builds are the only compile check that exists —
   `ufbt lint` runs clang-format and nothing more.
-- 80 I²C parts and 15 1-Wire families in the database.
+- 82 I²C parts and 15 1-Wire families in the database.
+- The bench is an `ssh notebook` (Windows) with a Flipper on COM5 running Unleashed. The app
+  is installed at `/ext/apps/GPIO/Programmers/fake_chip_detector.fap`; `tools/flipper_rpc.py`
+  drives it over the RPC channel for screenshots and key presses.
 
 ## The honest list: merged but never exercised on hardware
 
@@ -29,9 +33,17 @@ tried when a Flipper and the right parts are next in the same room.
 | Strap-and-blink power-cycle ladder, and the pad meter | #20 | The rail blink, and the automatic rescan behind it, unwatched. The pad meter has never been checked against a known level (pin 8 must read LOW, pin 9 HIGH, open air FLOATING). |
 | Live-test verdict wording | #21 | Never seen on a screen. |
 | Chip `kind` renames | #33 | Text only. Widths were measured exactly (see below), not photographed. |
-| AK09911 live test | #40 | **Never run on hardware.** No self-test coil has been fired, no CNTL2 write has been acknowledged, and the sensitivity correction was checked against one bench capture pasted into issue #38 rather than against a part on this desk. |
-| AK09911 and QMC5883P database rows, and the `RST` mode pin | #40 | The QMC5883P was added from its datasheet alone and no part has answered at 0x2C here. The AK09911's addresses and reset polarity come from the short-form datasheet; the register map behind the two ID checks rests on issue #38's citation agreeing with a bench read of `48 05 20 00`. The `RST` pad has never been strapped. |
+| AK09911 saturation screen | #44 | The overflow branch was rewritten to publish its own frame instead of freezing the display, and no magnet has been held against a part to watch it. Everything else in this test has now run. |
+| QMC5883P database row, and the `RST` mode pin | #40 | Added from its datasheet alone; no part has answered at 0x2C here. The `RST` pad has never been strapped — the AK09911 board on the bench was wired without it. |
 | `SEVERAL POSSIBLE` verdict | #40 | Covered by the host test in `tools/chip_db_test/`, which is real coverage of the decision but not of the screen. The summary line, the `Fits:` list on the detail screen and the report paragraph have never been drawn. |
+
+**Run on hardware 9 Sep 2026, and no longer on the list above:** an AK09911 on a Flipper
+running Unleashed identified as `GENUINE at 0x0D`, and its live test passed end to end — the
+self-test coil fired and landed inside the datasheet window, and the field followed the board
+when it was turned. That session is also what found #44: the screen only draws two lines under
+a heading and progress boxes, so the third was silently dropped, and the movement threshold had
+been calibrated against a magnet and sat above the physical maximum of the earth's field. Both
+are fixed. The AK09911 is the second part ever driven end to end here.
 
 Screen widths in #33 and #34 were measured with
 [`tools/screen_width.py`](tools/screen_width.py), which decodes the real `FontSecondary`

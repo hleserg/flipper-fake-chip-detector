@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9 — beta
+
+- **The AK09911 live test could not pass, and now it has.** It asked for the field to swing 100
+  counts on two axes. The earth puts about 50 counts into the whole vector, so no single axis
+  can swing that far however hard the board is waved — the threshold had been calibrated
+  against a bench capture with a magnet next to the sensor. Measured on a real part: two and a
+  half minutes of turning plateaued at 38/47/26 counts against a stationary noise floor of
+  4/5/7. The threshold is now 30, and the test passes in about ten seconds.
+- **The test screen said nothing about what to do.** It showed raw counts and a clock. The
+  instruction and the progress count were written to a third line that the screen has no room
+  to draw under a heading and progress boxes, so both were composed and silently dropped. The
+  first line is now the instruction, carrying its own feedback: **Turn it over - 1/2 axes**.
+- A saturated sensor used to freeze the display. The overflow branch skipped the screen update
+  and went round again, and the flag stays set for as long as the magnet is there, so the
+  advice to back off never appeared.
+- The passed screen lost its **not parked** warning to the same missing third line. That one
+  matters: it means the part was left in continuous mode.
+
+First release with an AK09911 on the bench. The identification, the reset guidance and the
+live test in 0.8 had all been written from datasheets alone.
+
 ## 0.8 — beta
 
 - **The app no longer names a chip the bus never identified.** When more than one part fits
